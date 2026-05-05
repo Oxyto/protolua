@@ -1,0 +1,20 @@
+on start do
+  local root: Slot = pf.root()
+  local ui: Slot = pf.find_slot(root, "UI")
+  local label: Slot = pf.child(ui, "Label")
+  local text: Component = pf.component(label, "FrooxEngine.UIX.Text")
+
+  write text.Content = "ProtoLua ready"
+  drive text.Color = color(0.2, 0.8, 1.0, 1.0)
+
+  pf.dyn.space(root, "ProtoLua")
+  pf.dyn.write_or_create(root, "ProtoLua.Status", "Ready", {
+    direct = true,
+    nonPersistent = false,
+  })
+
+  pf.node("Actions.Write", {
+    Variable = pf.ref(text.Content),
+    Value = "Written through a generic ProtoFlux node",
+  })
+end

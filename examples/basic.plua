@@ -1,0 +1,17 @@
+local speed = 2.5
+local distance = 10
+
+function travel(time)
+  local result = speed * time
+  if result > distance then
+    return distance
+  elseif result == distance then
+    return result
+  else
+    return result + 1
+  end
+end
+
+for i = 1, 4 do
+  distance = distance + i
+end
