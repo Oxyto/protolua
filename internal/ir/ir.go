@@ -25,37 +25,82 @@ type Builder struct {
 	next int
 }
 
+type lowerContext struct {
+	outputs []ast.Param
+}
+
 func Lower(program *ast.Program) Program {
 	b := &Builder{}
 	return Program{
 		Format:  "protolua.protoflux-ir",
 		Version: 1,
-		Nodes:   b.lowerStatements(program.Statements),
+		Nodes:   b.lowerStatements(program.Statements, lowerContext{}),
 	}
 }
 
-func (b *Builder) lowerStatements(stmts []ast.Stmt) []Node {
+func (b *Builder) lowerStatements(stmts []ast.Stmt, ctx lowerContext) []Node {
 	nodes := make([]Node, 0, len(stmts))
 	for _, stmt := range stmts {
-		nodes = append(nodes, b.lowerStmt(stmt))
+		nodes = append(nodes, b.lowerStmt(stmt, ctx)...)
 	}
 	return nodes
 }
 
-func (b *Builder) lowerStmt(stmt ast.Stmt) Node {
+func (b *Builder) lowerStmt(stmt ast.Stmt, ctx lowerContext) []Node {
 	switch s := stmt.(type) {
 	case *ast.LocalStmt:
-		inputs := map[string]any{"name": s.Name, "value": b.lowerExpr(s.Value)}
-		if s.Type != "" {
-			inputs["type"] = s.Type
+		names := s.Names
+		values := s.Values
+		if len(names) == 0 {
+			names = []ast.Param{{Name: s.Name, Type: s.Type}}
 		}
-		return b.node("Local", inputs, nil, nil)
+		if len(values) == 0 && s.Value != nil {
+			values = []ast.Expr{s.Value}
+		}
+		nodes := make([]Node, 0, len(names))
+		for i, name := range names {
+			var value ast.Expr
+			if i < len(values) {
+				value = values[i]
+			}
+			inputs := map[string]any{"name": name.Name, "value": b.lowerExpr(value)}
+			if name.Type != "" {
+				inputs["type"] = name.Type
+			}
+			nodes = append(nodes, b.node("Local", inputs, nil, nil))
+		}
+		return nodes
 	case *ast.AssignStmt:
-		if ident, ok := s.Target.(*ast.Identifier); ok {
-			return b.node("Set", map[string]any{"name": ident.Name, "value": b.lowerExpr(s.Value)}, nil, nil)
+		if event, ok := b.eventFromAssignment(s); ok {
+			return []Node{event}
 		}
-		return b.node("ProtoFluxWrite", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)
+		targets := s.Targets
+		values := s.Values
+		if len(targets) == 0 {
+			targets = []ast.Expr{s.Target}
+		}
+		if len(values) == 0 && s.Value != nil {
+			values = []ast.Expr{s.Value}
+		}
+		nodes := make([]Node, 0, len(targets))
+		for i, target := range targets {
+			var value ast.Expr
+			if i < len(values) {
+				value = values[i]
+			}
+			if ident, ok := target.(*ast.Identifier); ok {
+				nodes = append(nodes, b.node("Set", map[string]any{"name": ident.Name, "value": b.lowerExpr(value)}, nil, nil))
+				continue
+			}
+			nodes = append(nodes, b.node("ProtoFluxWrite", map[string]any{"target": b.lowerExpr(target), "value": b.lowerExpr(value)}, nil, nil))
+		}
+		return nodes
 	case *ast.FunctionStmt:
+		if strings.HasPrefix(s.Name, "events.") {
+			name := strings.TrimPrefix(s.Name, "events.")
+			outputs := outputsOrInfer(s.Outputs, s.Body)
+			return []Node{b.eventNode(name, s.Params, outputs, s.Body)}
+		}
 		inputs := map[string]any{"name": s.Name, "params": s.Params}
 		if s.ReturnType != "" {
 			inputs["returnType"] = s.ReturnType
@@ -63,58 +108,173 @@ func (b *Builder) lowerStmt(stmt ast.Stmt) Node {
 		if len(s.Outputs) > 0 {
 			inputs["outputs"] = s.Outputs
 		}
-		return b.node("Function", inputs, b.lowerStatements(s.Body), nil)
-	case *ast.EventStmt:
-		inputs := map[string]any{"name": s.Name, "params": s.Params}
+		bodyCtx := lowerContext{outputs: s.Outputs}
+		return []Node{b.node("Function", inputs, b.lowerStatements(s.Body, bodyCtx), nil)}
+	case *ast.LocalFunctionStmt:
+		inputs := map[string]any{"name": s.Name, "params": s.Params, "local": true}
+		if s.ReturnType != "" {
+			inputs["returnType"] = s.ReturnType
+		}
 		if len(s.Outputs) > 0 {
 			inputs["outputs"] = s.Outputs
 		}
-		return b.node("Event", inputs, b.lowerStatements(s.Body), nil)
+		bodyCtx := lowerContext{outputs: s.Outputs}
+		return []Node{b.node("Function", inputs, b.lowerStatements(s.Body, bodyCtx), nil)}
+	case *ast.EventStmt:
+		return []Node{b.eventNode(s.Name, s.Params, s.Outputs, s.Body)}
 	case *ast.IfStmt:
 		var currentElse []Node
 		if len(s.ElseBody) > 0 {
-			currentElse = b.lowerStatements(s.ElseBody)
+			currentElse = b.lowerStatements(s.ElseBody, ctx)
 		}
 		for i := len(s.Branches) - 1; i >= 0; i-- {
 			branch := s.Branches[i]
-			currentElse = []Node{b.node("If", map[string]any{"condition": b.lowerExpr(branch.Condition)}, b.lowerStatements(branch.Body), currentElse)}
+			currentElse = []Node{b.node("If", map[string]any{"condition": b.lowerExpr(branch.Condition)}, b.lowerStatements(branch.Body, ctx), currentElse)}
 		}
-		return currentElse[0]
+		return []Node{currentElse[0]}
 	case *ast.WhileStmt:
-		return b.node("While", map[string]any{"condition": b.lowerExpr(s.Condition)}, b.lowerStatements(s.Body), nil)
+		return []Node{b.node("While", map[string]any{"condition": b.lowerExpr(s.Condition)}, b.lowerStatements(s.Body, ctx), nil)}
+	case *ast.RepeatStmt:
+		return []Node{b.node("RepeatUntil", map[string]any{"condition": b.lowerExpr(s.Condition)}, b.lowerStatements(s.Body, ctx), nil)}
 	case *ast.ForStmt:
-		return b.node("NumericFor", map[string]any{
+		return []Node{b.node("NumericFor", map[string]any{
 			"name":  s.Name,
 			"start": b.lowerExpr(s.Start),
 			"end":   b.lowerExpr(s.End),
 			"step":  b.lowerExpr(s.Step),
-		}, b.lowerStatements(s.Body), nil)
+		}, b.lowerStatements(s.Body, ctx), nil)}
+	case *ast.BreakStmt:
+		return []Node{b.node("Break", nil, nil, nil)}
+	case *ast.ContinueStmt:
+		return []Node{b.node("Continue", nil, nil, nil)}
 	case *ast.ReturnStmt:
-		values := make([]any, 0, len(s.Values))
-		for _, value := range s.Values {
-			values = append(values, b.lowerExpr(value))
-		}
-		inputs := map[string]any{"values": values}
-		if len(values) == 1 {
-			inputs["value"] = values[0]
-		}
-		return b.node("Return", inputs, nil, nil)
+		return []Node{b.returnNode(s.Values, ctx)}
 	case *ast.OutputStmt:
-		return b.node("Output", map[string]any{"name": s.Name, "value": b.lowerExpr(s.Value)}, nil, nil)
+		return []Node{b.node("Output", map[string]any{"name": s.Name, "value": b.lowerExpr(s.Value)}, nil, nil)}
 	case *ast.WriteStmt:
-		return b.node("ProtoFluxWrite", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)
+		return []Node{b.node("ProtoFluxWrite", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)}
 	case *ast.DriveStmt:
-		return b.node("ProtoFluxDrive", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)
+		return []Node{b.node("ProtoFluxDrive", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)}
 	case *ast.ExprStmt:
 		if call, ok := s.Value.(*ast.CallExpr); ok {
 			if node, ok := b.lowerCallStmt(call); ok {
-				return node
+				return []Node{node}
 			}
 		}
-		return b.node("Eval", map[string]any{"value": b.lowerExpr(s.Value)}, nil, nil)
+		return []Node{b.node("Eval", map[string]any{"value": b.lowerExpr(s.Value)}, nil, nil)}
 	default:
-		return b.node("Unknown", map[string]any{"type": fmt.Sprintf("%T", stmt)}, nil, nil)
+		return []Node{b.node("Unknown", map[string]any{"type": fmt.Sprintf("%T", stmt)}, nil, nil)}
 	}
+}
+
+func (b *Builder) eventNode(name string, params, outputs []ast.Param, body []ast.Stmt) Node {
+	inputs := map[string]any{"name": name, "params": params}
+	if len(outputs) > 0 {
+		inputs["outputs"] = outputs
+	}
+	bodyCtx := lowerContext{outputs: outputs}
+	return b.node("Event", inputs, b.lowerStatements(body, bodyCtx), nil)
+}
+
+func (b *Builder) returnNode(rawValues []ast.Expr, ctx lowerContext) Node {
+	rawValues = normalizeReturnValues(rawValues, ctx.outputs)
+	values := make([]any, 0, len(rawValues))
+	for _, value := range rawValues {
+		values = append(values, b.lowerExpr(value))
+	}
+	inputs := map[string]any{"values": values}
+	if len(values) == 1 {
+		inputs["value"] = values[0]
+	}
+	return b.node("Return", inputs, nil, nil)
+}
+
+func normalizeReturnValues(values []ast.Expr, outputs []ast.Param) []ast.Expr {
+	if len(values) != 1 || len(outputs) == 0 {
+		return values
+	}
+	table, ok := values[0].(*ast.TableExpr)
+	if !ok {
+		return values
+	}
+	byName := map[string]ast.Expr{}
+	for _, field := range table.Fields {
+		if field.Key != "" {
+			byName[field.Key] = field.Value
+		}
+	}
+	if len(byName) == 0 {
+		return values
+	}
+	out := make([]ast.Expr, 0, len(outputs))
+	for _, output := range outputs {
+		value, ok := byName[output.Name]
+		if !ok {
+			return values
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func outputsOrInfer(outputs []ast.Param, body []ast.Stmt) []ast.Param {
+	if len(outputs) > 0 {
+		return outputs
+	}
+	return inferOutputsFromBody(body)
+}
+
+func inferOutputsFromBody(body []ast.Stmt) []ast.Param {
+	for _, stmt := range body {
+		switch s := stmt.(type) {
+		case *ast.ReturnStmt:
+			if len(s.Values) != 1 {
+				continue
+			}
+			table, ok := s.Values[0].(*ast.TableExpr)
+			if !ok {
+				continue
+			}
+			outputs := make([]ast.Param, 0, len(table.Fields))
+			for _, field := range table.Fields {
+				if field.Key != "" {
+					outputs = append(outputs, ast.Param{Name: field.Key})
+				}
+			}
+			if len(outputs) > 0 {
+				return outputs
+			}
+		case *ast.IfStmt:
+			for _, branch := range s.Branches {
+				if outputs := inferOutputsFromBody(branch.Body); len(outputs) > 0 {
+					return outputs
+				}
+			}
+			if outputs := inferOutputsFromBody(s.ElseBody); len(outputs) > 0 {
+				return outputs
+			}
+		}
+	}
+	return nil
+}
+
+func (b *Builder) eventFromAssignment(stmt *ast.AssignStmt) (Node, bool) {
+	if len(stmt.Targets) > 1 || len(stmt.Values) != 1 {
+		return Node{}, false
+	}
+	target, ok := stmt.Target.(*ast.MemberExpr)
+	if !ok {
+		return Node{}, false
+	}
+	if ident, ok := target.Object.(*ast.Identifier); !ok || ident.Name != "events" {
+		return Node{}, false
+	}
+	fn, ok := stmt.Values[0].(*ast.FunctionExpr)
+	if !ok {
+		return Node{}, false
+	}
+	outputs := outputsOrInfer(fn.Outputs, fn.Body)
+	return b.eventNode(target.Name, fn.Params, outputs, fn.Body), true
 }
 
 func (b *Builder) lowerCallStmt(call *ast.CallExpr) (Node, bool) {
@@ -163,6 +323,15 @@ func (b *Builder) lowerExpr(expr ast.Expr) any {
 		return map[string]any{"op": "Index", "object": b.lowerExpr(e.Object), "index": b.lowerExpr(e.Index)}
 	case *ast.CallExpr:
 		return b.lowerCallExpr(e)
+	case *ast.FunctionExpr:
+		inputs := map[string]any{"params": e.Params}
+		if e.ReturnType != "" {
+			inputs["returnType"] = e.ReturnType
+		}
+		if len(e.Outputs) > 0 {
+			inputs["outputs"] = e.Outputs
+		}
+		return map[string]any{"op": "FunctionLiteral", "inputs": inputs, "body": b.lowerStatements(e.Body, lowerContext{outputs: e.Outputs})}
 	default:
 		return map[string]any{"op": "UnknownExpr", "type": fmt.Sprintf("%T", expr)}
 	}
@@ -175,13 +344,142 @@ func (b *Builder) lowerCallExpr(call *ast.CallExpr) any {
 	if strings.HasPrefix(path, "pf.") {
 		return b.lowerProtoFluxCall(path, call.Args)
 	}
+	if alias, ok := protoFluxAlias(path); ok {
+		return b.lowerProtoFluxCall(alias, call.Args)
+	}
 	if isConstructor(path) {
 		return map[string]any{"op": "Construct", "type": path, "args": args}
 	}
 	if member, ok := call.Callee.(*ast.MemberExpr); ok && member.Method {
+		if lowered, ok := b.lowerProtoFluxMethod(member, call.Args); ok {
+			return lowered
+		}
 		return map[string]any{"op": "MethodCall", "receiver": b.lowerExpr(member.Object), "method": member.Name, "args": args}
 	}
 	return map[string]any{"op": "Call", "callee": b.lowerExpr(call.Callee), "args": args}
+}
+
+func protoFluxAlias(path string) (string, bool) {
+	switch path {
+	case "root":
+		return "pf.root", true
+	case "this":
+		return "pf.this", true
+	case "slot":
+		return "pf.slot", true
+	case "node":
+		return "pf.node", true
+	case "source":
+		return "pf.source", true
+	case "ref", "reference":
+		return "pf.ref", true
+	case "write":
+		return "pf.write", true
+	case "drive":
+		return "pf.drive", true
+	case "debug_log":
+		return "pf.debug_log", true
+	default:
+		return "", false
+	}
+}
+
+func (b *Builder) lowerProtoFluxMethod(member *ast.MemberExpr, args []ast.Expr) (map[string]any, bool) {
+	receiver := b.lowerExpr(member.Object)
+	loweredArgs := b.lowerArgs(args)
+	withReceiver := func(op string, names ...string) map[string]any {
+		inputs := map[string]any{"op": op}
+		if len(names) > 0 {
+			inputs[names[0]] = receiver
+		}
+		for i := 1; i < len(names); i++ {
+			if i-1 < len(loweredArgs) {
+				inputs[names[i]] = loweredArgs[i-1]
+			}
+		}
+		if len(loweredArgs) > len(names)-1 {
+			inputs["extraArgs"] = loweredArgs[len(names)-1:]
+		}
+		return inputs
+	}
+
+	if dynPath, ok := dynamicVariablePath(member.Object, b); ok {
+		switch member.Name {
+		case "read":
+			return mapWithArgs("DynamicVariableInput", []string{"path", "type", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		case "read_events", "input_events":
+			return mapWithArgs("DynamicVariableInputWithEvents", []string{"path", "type", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		case "write":
+			return mapWithArgs("WriteDynamicVariable", []string{"path", "value", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		case "create":
+			return mapWithArgs("CreateDynamicVariable", []string{"path", "initialValue", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		case "write_or_create":
+			return mapWithArgs("WriteOrCreateDynamicVariable", []string{"path", "value", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		case "delete":
+			return mapWithArgs("DeleteDynamicVariable", []string{"path", "type"}, append([]any{dynPath}, loweredArgs...)), true
+		case "drive":
+			return mapWithArgs("DynamicVariableDriver", []string{"path", "field", "options"}, append([]any{dynPath}, loweredArgs...)), true
+		}
+	}
+
+	switch member.Name {
+	case "find", "find_slot":
+		return withReceiver("FindSlot", "source", "path"), true
+	case "child":
+		return withReceiver("ChildSlot", "source", "name"), true
+	case "parent":
+		return withReceiver("ParentSlot", "source"), true
+	case "children":
+		return withReceiver("Children", "source"), true
+	case "component":
+		return withReceiver("ComponentRef", "slot", "type", "options"), true
+	case "components":
+		return withReceiver("ComponentList", "slot", "type", "options"), true
+	case "add_component":
+		return withReceiver("AddComponent", "slot", "type", "options"), true
+	case "slot", "get_slot":
+		return withReceiver("GetSlot", "component"), true
+	case "remove":
+		return withReceiver("RemoveComponent", "component"), true
+	case "enabled":
+		return withReceiver("ComponentEnabledSource", "component"), true
+	case "set_enabled":
+		return withReceiver("SetComponentEnabled", "component", "enabled"), true
+	case "set_active":
+		return withReceiver("SetActive", "target", "active"), true
+	case "destroy":
+		return withReceiver("Destroy", "target"), true
+	case "source", "get":
+		return withReceiver("FieldSource", "target"), true
+	case "ref", "reference":
+		return withReceiver("FieldReference", "target"), true
+	}
+	return nil, false
+}
+
+func mapWithArgs(op string, names []string, args []any) map[string]any {
+	inputs := map[string]any{"op": op}
+	for i, name := range names {
+		if i < len(args) {
+			inputs[name] = args[i]
+		}
+	}
+	if len(args) > len(names) {
+		inputs["extraArgs"] = args[len(names):]
+	}
+	return inputs
+}
+
+func dynamicVariablePath(expr ast.Expr, b *Builder) (any, bool) {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return nil, false
+	}
+	ident, ok := call.Callee.(*ast.Identifier)
+	if !ok || ident.Name != "dyn" || len(call.Args) == 0 {
+		return nil, false
+	}
+	return b.lowerExpr(call.Args[0]), true
 }
 
 func (b *Builder) lowerProtoFluxCall(path string, args []ast.Expr) map[string]any {

@@ -134,6 +134,16 @@ var tokenTypeIndex = func() map[string]int {
 }()
 
 var pfCompletions = []completionItem{
+	{Label: "events.start", Kind: 3, Detail: "Lua-compatible event", InsertText: "events.start = function()\n  \nend"},
+	{Label: "root", Kind: 3, Detail: "Root slot alias", InsertText: "root()"},
+	{Label: "this", Kind: 3, Detail: "Current slot alias", InsertText: "this()"},
+	{Label: "slot", Kind: 3, Detail: "Slot reference alias", InsertText: "slot(\"/Path\")"},
+	{Label: "node", Kind: 3, Detail: "Generic ProtoFlux node alias", InsertText: "node(\"Category.Node\", { })"},
+	{Label: "source", Kind: 3, Detail: "Field source alias", InsertText: "source(field)"},
+	{Label: "ref", Kind: 3, Detail: "Field reference alias", InsertText: "ref(field)"},
+	{Label: "write", Kind: 3, Detail: "ProtoFlux Write alias", InsertText: "write(field, value)"},
+	{Label: "drive", Kind: 3, Detail: "ProtoFlux Drive alias", InsertText: "drive(field, value)"},
+	{Label: "dyn", Kind: 3, Detail: "Dynamic variable handle", InsertText: "dyn(\"Space.Name\")"},
 	{Label: "pf.root", Kind: 3, Detail: "Root slot", InsertText: "pf.root()"},
 	{Label: "pf.this", Kind: 3, Detail: "Current slot", InsertText: "pf.this()"},
 	{Label: "pf.find_slot", Kind: 3, Detail: "Find child slot", InsertText: "pf.find_slot(root, \"Name\")"},
@@ -417,9 +427,17 @@ func hoverText(word string) string {
 	case "output":
 		return "`output name = value` writes a named output declared by `-> (...)`."
 	case "write":
-		return "`write target.Field = value` lowers to a ProtoFlux Write action."
+		return "`write(field, value)` or `write field = value` lowers to a ProtoFlux Write action."
 	case "drive":
-		return "`drive target.Field = value` lowers to a ProtoFlux field drive."
+		return "`drive(field, value)` or `drive field = value` lowers to a ProtoFlux field drive."
+	case "events":
+		return "`events.name = function(...) ... end` declares a Lua-compatible ProtoFlux entry point."
+	case "root":
+		return "`root()` is the Lua-compatible alias for `pf.root()`."
+	case "node":
+		return "`node(path, inputs)` is the Lua-compatible alias for `pf.node(path, inputs)`."
+	case "dyn":
+		return "`dyn(path)` creates a Lua-compatible dynamic variable handle."
 	case "pf":
 		return "`pf` exposes ProtoFlux, Slot, Component, field and dynamic variable helpers."
 	default:

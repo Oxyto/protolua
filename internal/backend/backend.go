@@ -261,7 +261,7 @@ func (b *builder) id(prefix string) string {
 
 func classify(op string) string {
 	switch op {
-	case "If", "While", "NumericFor", "Return", "Output":
+	case "If", "While", "RepeatUntil", "NumericFor", "Break", "Continue", "Return", "Output":
 		return "control"
 	case "Local", "Set":
 		return "variable"
@@ -312,6 +312,12 @@ func protoFluxPath(op string) string {
 		return "Variables.Dynamic.DynamicVariableDriver"
 	case "ProtoFluxNode":
 		return "Generic.Node"
+	case "RepeatUntil":
+		return "RepeatUntil"
+	case "Break":
+		return "Break"
+	case "Continue":
+		return "Continue"
 	default:
 		return op
 	}

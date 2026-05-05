@@ -1,0 +1,25 @@
+-- This file avoids ProtoLua-only statement forms such as `on`, `output`,
+-- `write field = value` and `drive field = value`.
+
+events.start = function()
+  local root = root()
+  local ui = root:find("UI")
+  local text = ui:child("Label"):component("FrooxEngine.UIX.Text")
+
+  write(text.Content, "ProtoLua ready")
+  drive(text.Color, color(0.2, 0.8, 1.0, 1.0))
+
+  dyn("ProtoLua.Status"):write("Ready")
+
+  node("Actions.Write", {
+    Variable = text.Content:ref(),
+    Value = "Written through Lua-compatible ProtoLua",
+  })
+end
+
+events.evaluate = function(value, threshold)
+  return {
+    passed = value >= threshold,
+    delta = value - threshold,
+  }
+end

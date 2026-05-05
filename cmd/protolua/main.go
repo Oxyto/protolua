@@ -52,14 +52,22 @@ func run(args []string) error {
 
 func check(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ContinueOnError)
+	profile := fs.String("profile", "protolua-extended", "syntax profile: protolua-extended or lua-compatible")
 	fs.SetOutput(os.Stderr)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: protolua check <file>")
+		return errors.New("usage: protolua check [--profile protolua-extended|lua-compatible] <file>")
 	}
-	program, err := parseFile(fs.Arg(0))
+	source, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	if err := validateProfile(string(source), *profile); err != nil {
+		return err
+	}
+	program, err := parseSource(string(source))
 	if err != nil {
 		return err
 	}
@@ -220,11 +228,46 @@ func parseFile(path string) (*ast.Program, error) {
 	if err != nil {
 		return nil, err
 	}
-	tokens, err := lexer.New(string(source)).Lex()
+	return parseSource(string(source))
+}
+
+func parseSource(source string) (*ast.Program, error) {
+	tokens, err := lexer.New(source).Lex()
 	if err != nil {
 		return nil, err
 	}
 	return parser.Parse(tokens)
+}
+
+func validateProfile(source, profile string) error {
+	switch profile {
+	case "", "protolua-extended":
+		return nil
+	case "lua-compatible":
+	default:
+		return fmt.Errorf("unsupported syntax profile %q", profile)
+	}
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		return err
+	}
+	for i, tok := range tokens {
+		if tok.Type == lexer.Keyword {
+			switch tok.Lexeme {
+			case "on", "output":
+				return fmt.Errorf("%d:%d: %q is ProtoLua extended syntax; use Lua-compatible events/returns instead", tok.Line, tok.Column, tok.Lexeme)
+			case "write", "drive":
+				if i+1 < len(tokens) && tokens[i+1].Lexeme == "(" {
+					continue
+				}
+				return fmt.Errorf("%d:%d: %q assignment syntax is ProtoLua extended syntax; use %s(field, value)", tok.Line, tok.Column, tok.Lexeme, tok.Lexeme)
+			}
+		}
+		if tok.Lexeme == "->" {
+			return fmt.Errorf("%d:%d: output arrow is ProtoLua extended syntax; use return tables or Lua type comments", tok.Line, tok.Column)
+		}
+	}
+	return nil
 }
 
 func failOnSemanticErrors(program *ast.Program) error {

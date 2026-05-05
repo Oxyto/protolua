@@ -107,3 +107,82 @@ end
 		t.Fatalf("expected 2 returned values, got %d", len(values))
 	}
 }
+
+func TestLowerLuaCompatibleProtoFluxSurface(t *testing.T) {
+	source := `
+--[[
+  Lua-compatible surface: event tables, prelude aliases and method calls.
+]]
+events.start = function()
+  local root = root()
+  local ui = root:find("UI")
+  local text = ui:child("Label"):component("FrooxEngine.UIX.Text")
+  write(text.Content, "Ready")
+  drive(text.Color, color(0.2, 0.8, 1.0, 1.0))
+  dyn("ProtoLua.Status"):write("Ready")
+  node("Actions.Write", {
+    Variable = text.Content:ref(),
+    Value = "Generic",
+  })
+  repeat
+    debug_log("tick")
+    break
+  until true
+end
+
+events.evaluate = function(value, threshold)
+  return { passed = value >= threshold, delta = value - threshold }
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowered := Lower(program)
+	if len(lowered.Nodes) != 2 {
+		t.Fatalf("expected two event nodes, got %d", len(lowered.Nodes))
+	}
+	start := lowered.Nodes[0]
+	if start.Op != "Event" || start.Inputs["name"] != "start" {
+		t.Fatalf("expected start event, got %#v", start)
+	}
+	wantOps := []string{
+		"Local",
+		"Local",
+		"Local",
+		"ProtoFluxWrite",
+		"ProtoFluxDrive",
+		"WriteDynamicVariable",
+		"ProtoFluxNode",
+		"RepeatUntil",
+	}
+	if len(start.Body) != len(wantOps) {
+		t.Fatalf("expected %d start body nodes, got %d", len(wantOps), len(start.Body))
+	}
+	for i, want := range wantOps {
+		if got := start.Body[i].Op; got != want {
+			t.Fatalf("start body[%d]: expected %s, got %s", i, want, got)
+		}
+	}
+	repeat := start.Body[len(start.Body)-1]
+	if repeat.Body[0].Op != "DebugLog" || repeat.Body[1].Op != "Break" {
+		t.Fatalf("expected repeat body to lower debug_log/break, got %#v", repeat.Body)
+	}
+
+	evaluate := lowered.Nodes[1]
+	if evaluate.Op != "Event" || evaluate.Inputs["name"] != "evaluate" {
+		t.Fatalf("expected evaluate event, got %#v", evaluate)
+	}
+	outputs := evaluate.Inputs["outputs"].([]ast.Param)
+	if len(outputs) != 2 || outputs[0].Name != "passed" || outputs[1].Name != "delta" {
+		t.Fatalf("expected return table to infer named outputs, got %#v", outputs)
+	}
+	values := evaluate.Body[0].Inputs["values"].([]any)
+	if len(values) != 2 {
+		t.Fatalf("expected return table to lower to two output values, got %#v", values)
+	}
+}

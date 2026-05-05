@@ -63,26 +63,26 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 
 - [ ] Definir officiellement le sous-ensemble Lua vise: ce qui doit rester identique a Lua standard, ce qui est volontairement ProtoLua.
 - [ ] Garder les scripts simples lisibles comme du Lua: moins de `pf.*` obligatoire quand le type permet d'inferer l'operation ProtoFlux.
-- [ ] Ajouter des sucres syntaxiques Lua-like pour les cas ProtoFlux frequents: field source/ref/write/drive, component lookup, slot lookup, dynvars.
-- [ ] Definir deux profils de syntaxe: `lua-compatible` avec uniquement des formes valides Lua, et `protolua-extended` avec les sucres `on`, `output`, `write ... =`, `drive ... =`.
-- [ ] Ajouter une prelude Lua-compatible qui alias les operations ProtoFlux frequentes sous forme d'appels Lua: `root()`, `this()`, `slot(path)`, `node(path, inputs)`, `source(field)`, `ref(field)`, `write(field, value)`, `drive(field, value)`.
-- [ ] Garder `pf.*` comme escape hatch bas niveau, mais documenter les alias simples comme API principale.
-- [ ] Ajouter une syntaxe method-call Lua pour les slots/components: `root:find("UI")`, `slot:child("Label")`, `slot:parent()`, `slot:children()`, `slot:component("Type")`, `slot:add_component("Type", opts)`.
-- [ ] Ajouter une syntaxe method-call Lua pour les fields/dynvars: `field:source()`, `field:ref()`, `dyn("Space.Name"):read("string")`, `dyn("Space.Name"):write(value)`, `dyn("Space.Name"):drive(field)`.
-- [ ] Ajouter une alternative Lua-compatible a `on`: table d'events ou declaration standard Lua, par exemple `events.start = function() ... end` et `events.update = function(deltaTime) ... end`.
-- [ ] Ajouter une alternative Lua-compatible a `output`: `return { passed = ..., delta = ... }` pour outputs nommes, et `return a, b` pour outputs positionnels.
+- [x] Ajouter des sucres syntaxiques Lua-like pour les cas ProtoFlux frequents: field source/ref/write/drive, component lookup, slot lookup, dynvars.
+- [x] Definir deux profils de syntaxe: `lua-compatible` avec uniquement des formes valides Lua, et `protolua-extended` avec les sucres `on`, `output`, `write ... =`, `drive ... =`.
+- [x] Ajouter une prelude Lua-compatible qui alias les operations ProtoFlux frequentes sous forme d'appels Lua: `root()`, `this()`, `slot(path)`, `node(path, inputs)`, `source(field)`, `ref(field)`, `write(field, value)`, `drive(field, value)`.
+- [x] Garder `pf.*` comme escape hatch bas niveau, mais documenter les alias simples comme API principale.
+- [x] Ajouter une syntaxe method-call Lua pour les slots/components: `root:find("UI")`, `slot:child("Label")`, `slot:parent()`, `slot:children()`, `slot:component("Type")`, `slot:add_component("Type", opts)`.
+- [x] Ajouter une syntaxe method-call Lua pour les fields/dynvars: `field:source()`, `field:ref()`, `dyn("Space.Name"):read("string")`, `dyn("Space.Name"):write(value)`, `dyn("Space.Name"):drive(field)`.
+- [x] Ajouter une alternative Lua-compatible a `on`: table d'events ou declaration standard Lua, par exemple `events.start = function() ... end` et `events.update = function(deltaTime) ... end`.
+- [x] Ajouter une alternative Lua-compatible a `output`: `return { passed = ..., delta = ... }` pour outputs nommes, et `return a, b` pour outputs positionnels.
 - [ ] Ajouter une alternative Lua-compatible aux annotations `: Type`: commentaires type-style `---@param`, `---@return`, `---@type`, tout en gardant les annotations courtes du mode etendu.
 - [ ] Formaliser les regles d'inference pour eviter `pf.source`/`pf.ref`: lecture de field en expression -> source, field passe a un port reference -> ref, affectation de field -> write ponctuel.
-- [ ] Garder `drive(...)` explicite pour les valeurs continues afin d'eviter qu'une affectation Lua standard change de semantique selon le contexte.
-- [ ] Ajouter une commande de verification `check --profile lua-compatible` qui refuse les sucres non Lua standard.
-- [ ] `repeat ... until`.
-- [ ] `break` et `continue`.
+- [x] Garder `drive(...)` explicite pour les valeurs continues afin d'eviter qu'une affectation Lua standard change de semantique selon le contexte.
+- [x] Ajouter une commande de verification `check --profile lua-compatible` qui refuse les sucres non Lua standard.
+- [x] `repeat ... until`.
+- [x] `break` et `continue`.
 - [ ] Tables plus completes: index numeriques, champs imbriques, champs implicites, trailing separators partout.
-- [ ] Supporter les commentaires Lua longs `--[[ ... ]]`.
-- [ ] Supporter les fonctions locales `local function name(...) ... end`.
-- [ ] Supporter les appels et affectations multiples Lua-like (`local a, b = ...`, `a, b = b, a`).
-- [ ] Supporter les varargs `...` si utiles pour helpers et wrappers.
-- [ ] Method calls `slot:method()` avec lowering semantique.
+- [x] Supporter les commentaires Lua longs `--[[ ... ]]`.
+- [x] Supporter les fonctions locales `local function name(...) ... end`.
+- [x] Supporter les appels et affectations multiples Lua-like (`local a, b = ...`, `a, b = b, a`).
+- [x] Supporter les varargs `...` si utiles pour helpers et wrappers.
+- [x] Method calls `slot:method()` avec lowering semantique.
 - [ ] Modules/imports si plusieurs fichiers deviennent necessaires.
 - [ ] Ajouter une petite stdlib compatible Lua quand elle se compile bien vers ProtoFlux: `math`, `string`, `table` utiles.
 - [ ] Decider explicitement si metatables, coroutines, IO/filesystem et debug Lua sont exclus, simules ou partiellement supportes.
@@ -91,7 +91,7 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 ## LSP
 
 - [x] Diagnostics syntaxiques.
-- [x] Completion mots-cles/types/`pf.*`.
+- [x] Completion mots-cles/types/`pf.*`/aliases Lua-compatible.
 - [x] Semantic tokens.
 - [x] Diagnostics semantiques de base.
 - [ ] Signature help pour `pf.*`.

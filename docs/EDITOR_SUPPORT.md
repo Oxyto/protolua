@@ -10,7 +10,7 @@ Il parle LSP sur stdio et fournit:
 
 - diagnostics lexer/parser;
 - diagnostics semantiques de base;
-- completions mots-cles, types et `pf.*`;
+- completions mots-cles, types, `pf.*` et aliases Lua-compatible;
 - hover pour les primitives principales;
 - semantic tokens pour la coloration VSCode/Zed.
 

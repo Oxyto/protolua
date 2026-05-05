@@ -38,8 +38,13 @@ Supported front-end features:
 - optional type annotations
 - `on ... do ... end` event entry points
 - event/function inputs and named outputs with `-> (...)`
+- Lua-compatible event declarations with `events.name = function(...) ... end`
+- Lua-compatible ProtoFlux aliases such as `root()`, `node(...)`, `write(field, value)`, `drive(field, value)` and `slot:component(...)`
 - component/field interactions through `pf.*`, `write` and `drive`
 - simple Lua table literals for named ProtoFlux inputs/options
+- `repeat ... until`
+- `break` and `continue`
+- `local function`
 - numbers, strings, booleans and `nil`
 - arithmetic, comparison and boolean operators
 
@@ -54,6 +59,12 @@ go run ./cmd/protolua check examples/basic.plua
 ```
 
 `check` runs syntax and basic semantic diagnostics: undeclared variables, same-scope redefinitions, named output usage and known `pf.*` arities.
+
+Validate the Lua-compatible surface:
+
+```sh
+go run ./cmd/protolua check --profile lua-compatible examples/lua_compatible.plua
+```
 
 Compile to the current ProtoLua IR:
 

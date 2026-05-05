@@ -26,7 +26,7 @@ type Token struct {
 }
 
 var keywords = map[string]bool{
-	"and": true, "break": true, "do": true, "else": true, "elseif": true,
+	"and": true, "break": true, "continue": true, "do": true, "else": true, "elseif": true,
 	"end": true, "false": true, "for": true, "function": true, "if": true,
 	"in": true, "local": true, "nil": true, "not": true, "or": true,
 	"repeat": true, "return": true, "then": true, "true": true, "until": true,
@@ -98,6 +98,13 @@ func (l *Lexer) nextToken() (Token, error) {
 		return Token{Type: String, Lexeme: text, Line: startLine, Column: startCol}, nil
 	}
 
+	three := string([]rune{ch, l.peek(), l.peekN(2)})
+	if isThreeCharOperator(three) {
+		l.advance()
+		l.advance()
+		return Token{Type: Operator, Lexeme: three, Line: startLine, Column: startCol}, nil
+	}
+
 	two := string([]rune{ch, l.peek()})
 	if isTwoCharOperator(two) {
 		l.advance()
@@ -121,6 +128,21 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			continue
 		}
 		if ch == '-' && l.peekNext() == '-' {
+			l.advance()
+			l.advance()
+			if l.peek() == '[' && l.peekNext() == '[' {
+				l.advance()
+				l.advance()
+				for !l.atEnd() {
+					if l.peek() == ']' && l.peekNext() == ']' {
+						l.advance()
+						l.advance()
+						break
+					}
+					l.advance()
+				}
+				continue
+			}
 			for !l.atEnd() && l.peek() != '\n' {
 				l.advance()
 			}
@@ -203,6 +225,13 @@ func (l *Lexer) peekNext() rune {
 	return l.source[l.pos+1]
 }
 
+func (l *Lexer) peekN(offset int) rune {
+	if l.pos+offset >= len(l.source) {
+		return 0
+	}
+	return l.source[l.pos+offset]
+}
+
 func (l *Lexer) atEnd() bool {
 	return l.pos >= len(l.source)
 }
@@ -218,6 +247,15 @@ func isIdentPart(r rune) bool {
 func isTwoCharOperator(s string) bool {
 	switch s {
 	case "==", "~=", "<=", ">=", "..", "->":
+		return true
+	default:
+		return false
+	}
+}
+
+func isThreeCharOperator(s string) bool {
+	switch s {
+	case "...":
 		return true
 	default:
 		return false

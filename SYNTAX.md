@@ -9,9 +9,50 @@ Le but est de garder le code proche de Lua tout en produisant un IR facile a aba
 - Le flux de controle est textuel et imperative: `if`, `while`, `for`, `function`, `return`.
 - Les valeurs suivent les primitives Lua: nombres, strings, booleens et `nil`.
 - Les annotations de type sont optionnelles et servent au backend ProtoFlux: `Slot`, `Component`, `float3`, `color`, `FrooxEngine.UIX.Text`.
-- Les operations ProtoFlux explicites passent par `pf.*`.
+- Les operations ProtoFlux explicites peuvent passer par `pf.*`, mais les aliases Lua-compatible sont preferes pour les cas courants.
 - Les champs de composants peuvent etre lus comme sources, ecrits une fois, drives en continu, ou references.
 - Un appel `pf.*` inconnu reste representable par l'IR generique `ProtoFluxIntrinsic`, ce qui permet d'utiliser un noeud ProtoFlux pas encore specialise dans le compilateur.
+
+## Profils de syntaxe
+
+ProtoLua accepte deux profils:
+
+- `protolua-extended`: syntaxe complete avec `on`, `output`, `write field = value`, `drive field = value` et annotations courtes `: Type`.
+- `lua-compatible`: surface qui reste proche de Lua standard. Les events sont declares via `events.name = function(...) ... end`, les writes/drives sont des appels `write(field, value)` et `drive(field, value)`, et les outputs nommes peuvent etre retournes avec une table.
+
+Verification du profil Lua-compatible:
+
+```sh
+protolua check --profile lua-compatible examples/lua_compatible.plua
+```
+
+Prelude Lua-compatible:
+
+```lua
+events.start = function()
+  local root = root()
+  local ui = root:find("UI")
+  local text = ui:child("Label"):component("FrooxEngine.UIX.Text")
+
+  write(text.Content, "Ready")
+  drive(text.Color, color(0.2, 0.8, 1.0, 1.0))
+  dyn("ProtoLua.Status"):write("Ready")
+
+  node("Actions.Write", {
+    Variable = text.Content:ref(),
+    Value = "Generic",
+  })
+end
+
+events.evaluate = function(value, threshold)
+  return {
+    passed = value >= threshold,
+    delta = value - threshold,
+  }
+end
+```
+
+`pf.*` reste disponible comme escape hatch bas niveau quand un helper simple n'existe pas encore.
 
 ## Programme
 

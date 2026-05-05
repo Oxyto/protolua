@@ -53,6 +53,26 @@ end
 	}
 }
 
+func TestAnalyzeLuaCompatibleProtoFluxSurface(t *testing.T) {
+	diagnostics := analyzeSource(t, `
+events.start = function()
+  local root = root()
+  local ui = root:find("UI")
+  local text = ui:child("Label"):component("FrooxEngine.UIX.Text")
+  write(text.Content, "Ready")
+  drive(text.Color, color(0.2, 0.8, 1.0, 1.0))
+  dyn("ProtoLua.Status"):write("Ready")
+  repeat
+    debug_log("tick")
+    continue
+  until true
+end
+`)
+	if len(diagnostics) != 0 {
+		t.Fatalf("expected no diagnostics, got %#v", diagnostics)
+	}
+}
+
 func analyzeSource(t *testing.T, source string) []Diagnostic {
 	t.Helper()
 	tokens, err := lexer.New(source).Lex()

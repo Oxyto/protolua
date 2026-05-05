@@ -36,6 +36,9 @@ func (p *Parser) program() (*ast.Program, error) {
 func (p *Parser) statement() (ast.Stmt, error) {
 	switch {
 	case p.matchKeyword("local"):
+		if p.matchKeyword("function") {
+			return p.localFunctionStmt()
+		}
 		return p.localStmt()
 	case p.matchKeyword("function"):
 		return p.functionStmt()
@@ -45,38 +48,48 @@ func (p *Parser) statement() (ast.Stmt, error) {
 		return p.ifStmt()
 	case p.matchKeyword("while"):
 		return p.whileStmt()
+	case p.matchKeyword("repeat"):
+		return p.repeatStmt()
 	case p.matchKeyword("for"):
 		return p.forStmt()
+	case p.matchKeyword("break"):
+		return &ast.BreakStmt{}, nil
+	case p.matchKeyword("continue"):
+		return &ast.ContinueStmt{}, nil
 	case p.matchKeyword("return"):
 		return p.returnStmt()
 	case p.matchKeyword("output"):
 		return p.outputStmt()
 	case p.matchKeyword("write"):
-		return p.writeStmt()
+		return p.writeStmtOrCall()
 	case p.matchKeyword("drive"):
-		return p.driveStmt()
+		return p.driveStmtOrCall()
 	default:
 		return p.assignmentOrExprStmt()
 	}
 }
 
 func (p *Parser) localStmt() (ast.Stmt, error) {
-	name, err := p.consume(lexer.Identifier, "expected local variable name")
+	names, err := p.paramList("expected local variable name")
 	if err != nil {
 		return nil, err
 	}
-	typ, err := p.typeAnnotation()
-	if err != nil {
-		return nil, err
-	}
-	var value ast.Expr
+	values := []ast.Expr{}
 	if p.matchOp("=") {
-		value, err = p.expression()
+		values, err = p.expressionList()
 		if err != nil {
 			return nil, err
 		}
 	}
-	return &ast.LocalStmt{Name: name.Lexeme, Type: typ, Value: value}, nil
+	stmt := &ast.LocalStmt{Names: names, Values: values}
+	if len(names) > 0 {
+		stmt.Name = names[0].Name
+		stmt.Type = names[0].Type
+	}
+	if len(values) > 0 {
+		stmt.Value = values[0]
+	}
+	return stmt, nil
 }
 
 func (p *Parser) functionStmt() (ast.Stmt, error) {
@@ -84,26 +97,46 @@ func (p *Parser) functionStmt() (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = p.consumeLexeme("(", "expected '(' after function name"); err != nil {
+	params, outputs, returnType, body, err := p.functionTail("function name")
+	if err != nil {
 		return nil, err
+	}
+	return &ast.FunctionStmt{Name: name, Params: params, ReturnType: returnType, Outputs: outputs, Body: body}, nil
+}
+
+func (p *Parser) localFunctionStmt() (ast.Stmt, error) {
+	name, err := p.consume(lexer.Identifier, "expected local function name")
+	if err != nil {
+		return nil, err
+	}
+	params, outputs, returnType, body, err := p.functionTail("function name")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.LocalFunctionStmt{Name: name.Lexeme, Params: params, ReturnType: returnType, Outputs: outputs, Body: body}, nil
+}
+
+func (p *Parser) functionTail(_ string) ([]ast.Param, []ast.Param, string, []ast.Stmt, error) {
+	if _, err := p.consumeLexeme("(", "expected '(' after function name"); err != nil {
+		return nil, nil, "", nil, err
 	}
 	params, err := p.params()
 	if err != nil {
-		return nil, err
+		return nil, nil, "", nil, err
 	}
 	if _, err = p.consumeLexeme(")", "expected ')' after parameters"); err != nil {
-		return nil, err
+		return nil, nil, "", nil, err
 	}
 	outputs, returnType, err := p.outputsOrReturnType()
 	if err != nil {
-		return nil, err
+		return nil, nil, "", nil, err
 	}
 	body, err := p.blockUntil("end")
 	if err != nil {
-		return nil, err
+		return nil, nil, "", nil, err
 	}
 	p.advance()
-	return &ast.FunctionStmt{Name: name, Params: params, ReturnType: returnType, Outputs: outputs, Body: body}, nil
+	return params, outputs, returnType, body, nil
 }
 
 func (p *Parser) eventStmt() (ast.Stmt, error) {
@@ -191,6 +224,21 @@ func (p *Parser) whileStmt() (ast.Stmt, error) {
 	return &ast.WhileStmt{Condition: cond, Body: body}, nil
 }
 
+func (p *Parser) repeatStmt() (ast.Stmt, error) {
+	body, err := p.blockUntil("until")
+	if err != nil {
+		return nil, err
+	}
+	if _, err = p.consumeKeyword("until", "expected 'until' after repeat block"); err != nil {
+		return nil, err
+	}
+	cond, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.RepeatStmt{Body: body, Condition: cond}, nil
+}
+
 func (p *Parser) forStmt() (ast.Stmt, error) {
 	name, err := p.consume(lexer.Identifier, "expected loop variable name")
 	if err != nil {
@@ -262,12 +310,45 @@ func (p *Parser) writeStmt() (ast.Stmt, error) {
 	return &ast.WriteStmt{Target: target, Value: value}, nil
 }
 
+func (p *Parser) writeStmtOrCall() (ast.Stmt, error) {
+	if p.checkLexeme("(") {
+		call, err := p.keywordCall("write")
+		if err != nil {
+			return nil, err
+		}
+		return &ast.ExprStmt{Value: call}, nil
+	}
+	return p.writeStmt()
+}
+
 func (p *Parser) driveStmt() (ast.Stmt, error) {
 	target, value, err := p.targetValue("drive")
 	if err != nil {
 		return nil, err
 	}
 	return &ast.DriveStmt{Target: target, Value: value}, nil
+}
+
+func (p *Parser) driveStmtOrCall() (ast.Stmt, error) {
+	if p.checkLexeme("(") {
+		call, err := p.keywordCall("drive")
+		if err != nil {
+			return nil, err
+		}
+		return &ast.ExprStmt{Value: call}, nil
+	}
+	return p.driveStmt()
+}
+
+func (p *Parser) keywordCall(name string) (ast.Expr, error) {
+	if _, err := p.consumeLexeme("(", "expected '(' after "+name); err != nil {
+		return nil, err
+	}
+	args, err := p.arguments(")")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.CallExpr{Callee: &ast.Identifier{Name: name}, Args: args}, nil
 }
 
 func (p *Parser) targetValue(kind string) (ast.Expr, ast.Expr, error) {
@@ -290,15 +371,32 @@ func (p *Parser) assignmentOrExprStmt() (ast.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p.matchOp("=") {
-		if !isAssignable(expr) {
-			return nil, p.errorAt(p.previous(), "invalid assignment target")
-		}
-		value, err := p.expression()
+	targets := []ast.Expr{expr}
+	for p.matchPunct(",") {
+		target, err := p.expression()
 		if err != nil {
 			return nil, err
 		}
-		return &ast.AssignStmt{Target: expr, Value: value}, nil
+		targets = append(targets, target)
+	}
+	if p.matchOp("=") {
+		for _, target := range targets {
+			if !isAssignable(target) {
+				return nil, p.errorAt(p.previous(), "invalid assignment target")
+			}
+		}
+		values, err := p.expressionList()
+		if err != nil {
+			return nil, err
+		}
+		stmt := &ast.AssignStmt{Target: targets[0], Targets: targets, Values: values}
+		if len(values) > 0 {
+			stmt.Value = values[0]
+		}
+		return stmt, nil
+	}
+	if len(targets) > 1 {
+		return nil, p.errorAt(p.previous(), "expected '=' after assignment target list")
 	}
 	return &ast.ExprStmt{Value: expr}, nil
 }
@@ -405,7 +503,7 @@ func (p *Parser) call() (ast.Expr, error) {
 			}
 			expr = &ast.MemberExpr{Object: expr, Name: name.Lexeme}
 		case p.matchPunct(":"):
-			name, err := p.consume(lexer.Identifier, "expected method name after ':'")
+			name, err := p.memberName("expected method name after ':'")
 			if err != nil {
 				return nil, err
 			}
@@ -444,6 +542,9 @@ func (p *Parser) arguments(close string) ([]ast.Expr, error) {
 			if !p.matchPunct(",") {
 				break
 			}
+			if p.checkLexeme(close) {
+				break
+			}
 		}
 	}
 	if _, err := p.consumeLexeme(close, "expected '"+close+"' after arguments"); err != nil {
@@ -464,6 +565,20 @@ func (p *Parser) primary() (ast.Expr, error) {
 	}
 	if p.matchKeyword("nil") {
 		return &ast.Literal{Kind: "nil", Value: "nil"}, nil
+	}
+	if p.matchKeyword("function") {
+		params, outputs, returnType, body, err := p.functionTail("function expression")
+		if err != nil {
+			return nil, err
+		}
+		return &ast.FunctionExpr{Params: params, Outputs: outputs, ReturnType: returnType, Body: body}, nil
+	}
+	if p.matchKeyword("write") || p.matchKeyword("drive") {
+		return &ast.Identifier{Name: p.previous().Lexeme}, nil
+	}
+	if p.checkLexeme("...") {
+		p.advance()
+		return &ast.Identifier{Name: "..."}, nil
 	}
 	if p.match(lexer.Identifier) {
 		return &ast.Identifier{Name: p.previous().Lexeme}, nil
@@ -542,11 +657,20 @@ func (p *Parser) tableField() (ast.TableField, error) {
 }
 
 func (p *Parser) params() ([]ast.Param, error) {
+	return p.paramList("expected parameter name")
+}
+
+func (p *Parser) paramList(message string) ([]ast.Param, error) {
 	params := []ast.Param{}
 	if p.checkLexeme(")") {
 		return params, nil
 	}
 	for {
+		if p.checkLexeme("...") {
+			p.advance()
+			params = append(params, ast.Param{Name: "..."})
+			break
+		}
 		param, err := p.consume(lexer.Identifier, "expected parameter name")
 		if err != nil {
 			return nil, err
@@ -557,6 +681,9 @@ func (p *Parser) params() ([]ast.Param, error) {
 		}
 		params = append(params, ast.Param{Name: param.Lexeme, Type: typ})
 		if !p.matchPunct(",") {
+			break
+		}
+		if p.checkLexeme(")") {
 			break
 		}
 	}
@@ -643,6 +770,13 @@ func (p *Parser) qualifiedName(message string) (string, error) {
 		return strings.Join(parts, ".") + ":" + next.Lexeme, nil
 	}
 	return strings.Join(parts, "."), nil
+}
+
+func (p *Parser) memberName(message string) (lexer.Token, error) {
+	if p.check(lexer.Identifier) || p.check(lexer.Keyword) {
+		return p.advance(), nil
+	}
+	return lexer.Token{}, p.errorAt(p.peek(), message)
 }
 
 func (p *Parser) eventName() (string, error) {

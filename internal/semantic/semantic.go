@@ -42,6 +42,16 @@ type pfSignature struct {
 
 var builtins = map[string]bool{
 	"pf":      true,
+	"events":  true,
+	"root":    true,
+	"this":    true,
+	"slot":    true,
+	"node":    true,
+	"source":  true,
+	"ref":     true,
+	"dyn":     true,
+	"write":   true,
+	"drive":   true,
 	"color":   true,
 	"float2":  true,
 	"float3":  true,
@@ -181,20 +191,57 @@ func (a *Analyzer) statements(stmts []ast.Stmt, current *scope, ctx *context) {
 func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 	switch s := stmt.(type) {
 	case *ast.LocalStmt:
-		a.expr(s.Value, current)
-		if !current.define(s.Name) {
-			a.add(Error, fmt.Sprintf("variable %q is already declared in this scope", s.Name), s.Name)
+		values := s.Values
+		if len(values) == 0 && s.Value != nil {
+			values = []ast.Expr{s.Value}
+		}
+		for _, value := range values {
+			a.expr(value, current)
+		}
+		names := s.Names
+		if len(names) == 0 {
+			names = []ast.Param{{Name: s.Name, Type: s.Type}}
+		}
+		for _, name := range names {
+			if !current.define(name.Name) {
+				a.add(Error, fmt.Sprintf("variable %q is already declared in this scope", name.Name), name.Name)
+			}
 		}
 	case *ast.AssignStmt:
-		if ident, ok := s.Target.(*ast.Identifier); ok {
-			if !current.has(ident.Name) {
-				a.add(Error, fmt.Sprintf("assignment to undeclared variable %q", ident.Name), ident.Name)
-			}
-		} else {
-			a.expr(s.Target, current)
+		targets := s.Targets
+		values := s.Values
+		if len(targets) == 0 {
+			targets = []ast.Expr{s.Target}
 		}
-		a.expr(s.Value, current)
+		if len(values) == 0 && s.Value != nil {
+			values = []ast.Expr{s.Value}
+		}
+		for _, target := range targets {
+			if ident, ok := target.(*ast.Identifier); ok {
+				if !current.has(ident.Name) {
+					a.add(Error, fmt.Sprintf("assignment to undeclared variable %q", ident.Name), ident.Name)
+				}
+			} else {
+				a.expr(target, current)
+			}
+		}
+		for _, value := range values {
+			a.expr(value, current)
+		}
 	case *ast.FunctionStmt:
+		fnScope := newScope(current)
+		for _, param := range s.Params {
+			if !fnScope.define(param.Name) {
+				a.add(Error, fmt.Sprintf("parameter %q is already declared", param.Name), param.Name)
+			}
+		}
+		ctx := newContext(s.Outputs, true)
+		a.statements(s.Body, fnScope, ctx)
+		a.checkUnassignedOutputs(ctx)
+	case *ast.LocalFunctionStmt:
+		if !current.define(s.Name) {
+			a.add(Error, fmt.Sprintf("function %q is already declared in this scope", s.Name), s.Name)
+		}
 		fnScope := newScope(current)
 		for _, param := range s.Params {
 			if !fnScope.define(param.Name) {
@@ -223,6 +270,9 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 	case *ast.WhileStmt:
 		a.expr(s.Condition, current)
 		a.statements(s.Body, newScope(current), ctx)
+	case *ast.RepeatStmt:
+		a.statements(s.Body, newScope(current), ctx)
+		a.expr(s.Condition, current)
 	case *ast.ForStmt:
 		a.expr(s.Start, current)
 		a.expr(s.End, current)
@@ -257,6 +307,7 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 	case *ast.DriveStmt:
 		a.expr(s.Target, current)
 		a.expr(s.Value, current)
+	case *ast.BreakStmt, *ast.ContinueStmt:
 	case *ast.ExprStmt:
 		a.expr(s.Value, current)
 	}
@@ -310,17 +361,54 @@ func (a *Analyzer) expr(expr ast.Expr, current *scope) {
 		a.expr(e.Index, current)
 	case *ast.CallExpr:
 		a.call(e, current)
+	case *ast.FunctionExpr:
+		fnScope := newScope(current)
+		for _, param := range e.Params {
+			if !fnScope.define(param.Name) {
+				a.add(Error, fmt.Sprintf("parameter %q is already declared", param.Name), param.Name)
+			}
+		}
+		ctx := newContext(e.Outputs, true)
+		a.statements(e.Body, fnScope, ctx)
+		a.checkUnassignedOutputs(ctx)
 	}
 }
 
 func (a *Analyzer) call(call *ast.CallExpr, current *scope) {
 	if path := strings.Join(callPath(call.Callee), "."); strings.HasPrefix(path, "pf.") {
 		a.checkProtoFluxArity(path, len(call.Args))
+	} else if alias, ok := semanticProtoFluxAlias(path); ok {
+		a.checkProtoFluxArity(alias, len(call.Args))
 	} else {
 		a.expr(call.Callee, current)
 	}
 	for _, arg := range call.Args {
 		a.expr(arg, current)
+	}
+}
+
+func semanticProtoFluxAlias(path string) (string, bool) {
+	switch path {
+	case "root":
+		return "pf.root", true
+	case "this":
+		return "pf.this", true
+	case "slot":
+		return "pf.slot", true
+	case "node":
+		return "pf.node", true
+	case "source":
+		return "pf.source", true
+	case "ref":
+		return "pf.ref", true
+	case "write":
+		return "pf.write", true
+	case "drive":
+		return "pf.drive", true
+	case "debug_log":
+		return "pf.debug_log", true
+	default:
+		return "", false
 	}
 }
 
