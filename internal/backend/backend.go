@@ -1,11 +1,6 @@
 package backend
 
 import (
-	"bytes"
-	"compress/gzip"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -66,6 +61,7 @@ type ProtoFlux struct {
 	EntryPoints []EntryPoint `json:"entryPoints,omitempty"`
 	Functions   []Function   `json:"functions,omitempty"`
 	Nodes       []GraphNode  `json:"nodes,omitempty"`
+	Wires       []GraphWire  `json:"wires,omitempty"`
 	Diagnostics []Diagnostic `json:"diagnostics,omitempty"`
 }
 
@@ -74,6 +70,8 @@ type EntryPoint struct {
 	Name    string      `json:"name"`
 	Inputs  []Port      `json:"inputs,omitempty"`
 	Outputs []Port      `json:"outputs,omitempty"`
+	Ports   []GraphPort `json:"ports,omitempty"`
+	Wires   []GraphWire `json:"wires,omitempty"`
 	Nodes   []GraphNode `json:"nodes,omitempty"`
 }
 
@@ -83,6 +81,8 @@ type Function struct {
 	Inputs     []Port      `json:"inputs,omitempty"`
 	Outputs    []Port      `json:"outputs,omitempty"`
 	ReturnType string      `json:"returnType,omitempty"`
+	Ports      []GraphPort `json:"ports,omitempty"`
+	Wires      []GraphWire `json:"wires,omitempty"`
 	Nodes      []GraphNode `json:"nodes,omitempty"`
 }
 
@@ -93,12 +93,34 @@ type Port struct {
 
 type GraphNode struct {
 	ID       string         `json:"id"`
+	Op       string         `json:"op"`
 	Kind     string         `json:"kind"`
 	Path     string         `json:"path"`
 	Inputs   map[string]any `json:"inputs,omitempty"`
+	Ports    []GraphPort    `json:"ports,omitempty"`
+	Wires    []GraphWire    `json:"wires,omitempty"`
 	Body     []GraphNode    `json:"body,omitempty"`
 	Else     []GraphNode    `json:"else,omitempty"`
 	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type GraphPort struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Direction string `json:"direction"`
+	Kind      string `json:"kind"`
+	Type      string `json:"type,omitempty"`
+	Symbol    string `json:"symbol,omitempty"`
+}
+
+type GraphWire struct {
+	ID         string         `json:"id"`
+	Kind       string         `json:"kind"`
+	From       string         `json:"from,omitempty"`
+	To         string         `json:"to,omitempty"`
+	SourceNode string         `json:"sourceNode,omitempty"`
+	TargetNode string         `json:"targetNode,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
 }
 
 type Diagnostic struct {
@@ -170,6 +192,8 @@ func BuildFromIR(lowered ir.Program, opts Options) Record {
 
 	record.Warnings = append(record.Warnings, b.warnings...)
 	record.Graph.Diagnostics = b.diagnostics(record.Warnings)
+	b.connectGraph(&record)
+	b.materializeGraphSlots(&record)
 	return record
 }
 
@@ -177,100 +201,6 @@ func WriteRecordJSON(w io.Writer, record Record) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(record)
-}
-
-func WriteExperimentalBRSON(w io.Writer, record Record) error {
-	record.Format = BRSONFormat
-	record.Backend.Target = "experimental-brson-container"
-	record.Backend.Importable = false
-	record.Warnings = append([]string{
-		"Experimental .brson carrier: this is not guaranteed to be importable by Resonite until the official binary record layout is implemented.",
-	}, record.Warnings...)
-
-	payload, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	var zipped bytes.Buffer
-	gz := gzip.NewWriter(&zipped)
-	if _, err := gz.Write(payload); err != nil {
-		return err
-	}
-	if err := gz.Close(); err != nil {
-		return err
-	}
-	sum := sha256.Sum256(payload)
-
-	if _, err := w.Write([]byte("PLBRSON\x00")); err != nil {
-		return err
-	}
-	if err := binary.Write(w, binary.LittleEndian, uint32(1)); err != nil {
-		return err
-	}
-	if _, err := w.Write(sum[:]); err != nil {
-		return err
-	}
-	if err := binary.Write(w, binary.LittleEndian, uint64(len(payload))); err != nil {
-		return err
-	}
-	if err := binary.Write(w, binary.LittleEndian, uint64(zipped.Len())); err != nil {
-		return err
-	}
-	_, err = w.Write(zipped.Bytes())
-	return err
-}
-
-func InspectExperimentalBRSON(r io.Reader) (Record, error) {
-	var header [8]byte
-	if _, err := io.ReadFull(r, header[:]); err != nil {
-		return Record{}, err
-	}
-	if string(header[:]) != "PLBRSON\x00" {
-		return Record{}, fmt.Errorf("invalid ProtoLua brson magic")
-	}
-	var version uint32
-	if err := binary.Read(r, binary.LittleEndian, &version); err != nil {
-		return Record{}, err
-	}
-	if version != 1 {
-		return Record{}, fmt.Errorf("unsupported ProtoLua brson version %d", version)
-	}
-	var sum [32]byte
-	if _, err := io.ReadFull(r, sum[:]); err != nil {
-		return Record{}, err
-	}
-	var rawLen, zippedLen uint64
-	if err := binary.Read(r, binary.LittleEndian, &rawLen); err != nil {
-		return Record{}, err
-	}
-	if err := binary.Read(r, binary.LittleEndian, &zippedLen); err != nil {
-		return Record{}, err
-	}
-	zipped := make([]byte, zippedLen)
-	if _, err := io.ReadFull(r, zipped); err != nil {
-		return Record{}, err
-	}
-	gz, err := gzip.NewReader(bytes.NewReader(zipped))
-	if err != nil {
-		return Record{}, err
-	}
-	defer gz.Close()
-	payload, err := io.ReadAll(gz)
-	if err != nil {
-		return Record{}, err
-	}
-	if uint64(len(payload)) != rawLen {
-		return Record{}, fmt.Errorf("payload length mismatch")
-	}
-	got := sha256.Sum256(payload)
-	if got != sum {
-		return Record{}, fmt.Errorf("payload checksum mismatch: got %s want %s", hex.EncodeToString(got[:]), hex.EncodeToString(sum[:]))
-	}
-	var record Record
-	if err := json.Unmarshal(payload, &record); err != nil {
-		return Record{}, err
-	}
-	return record, nil
 }
 
 func (b *builder) entryPoint(node ir.Node) EntryPoint {
@@ -306,6 +236,7 @@ func (b *builder) graphNode(node ir.Node) GraphNode {
 	inputs := normalizeMap(node.Inputs)
 	return GraphNode{
 		ID:       node.ID,
+		Op:       node.Op,
 		Kind:     classify(node.Op),
 		Path:     protoFluxPath(node.Op),
 		Inputs:   inputs,
@@ -334,9 +265,19 @@ func classify(op string) string {
 		return "control"
 	case "Local", "Set":
 		return "variable"
-	case "ProtoFluxWrite", "ProtoFluxDrive", "ProtoFluxImpulse", "AddComponent", "RemoveComponent", "CreateSlot", "Destroy", "SetActive", "SetComponentEnabled":
+	case "ProtoFluxWrite", "ProtoFluxDrive", "ProtoFluxImpulse", "ProtoFluxNode",
+		"ProtoFluxPack", "ProtoFluxUnpack", "ProtoFluxDelay", "DebugLog",
+		"AddComponent", "RemoveComponent", "CreateSlot", "Destroy", "SetActive", "SetComponentEnabled",
+		"ListSet", "ListAdd", "ListInsert", "ListRemove", "ListClear",
+		"WriteDynamicVariable", "CreateDynamicVariable", "WriteOrCreateDynamicVariable",
+		"DeleteDynamicVariable", "ClearDynamicVariables", "ClearDynamicVariablesOfType",
+		"DynamicVariableSpace", "DynamicVariableDriver":
 		return "action"
-	case "RootSlot", "ThisSlot", "SlotRef", "FindSlot", "ChildSlot", "ParentSlot", "Children", "ComponentRef", "ComponentList", "FieldSource", "FieldReference", "FieldRef", "FieldListRef":
+	case "RootSlot", "ThisSlot", "SlotRef", "FindSlot", "ChildSlot", "ParentSlot", "Children",
+		"ComponentRef", "ComponentList", "GetSlot", "ComponentEnabledSource",
+		"FieldSource", "FieldReference", "ReferenceToOutput", "FieldRef", "FieldListRef",
+		"ListGet", "ListCount",
+		"ReadDynamicVariable", "DynamicVariableInput", "DynamicVariableInputWithEvents":
 		return "source"
 	default:
 		return "node"

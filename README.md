@@ -53,6 +53,8 @@ Run a syntax check:
 go run ./cmd/protolua check examples/basic.plua
 ```
 
+`check` runs syntax and basic semantic diagnostics: undeclared variables, same-scope redefinitions, named output usage and known `pf.*` arities.
+
 Compile to the current ProtoLua IR:
 
 ```sh
@@ -69,6 +71,12 @@ Compile to the experimental `.brson` carrier:
 
 ```sh
 go run ./cmd/protolua compile examples/flux_component.plua -format brson -o out.brson
+```
+
+Inspect the generated `.brson` bootstrap document:
+
+```sh
+go run ./cmd/protolua inspect-brson out.brson
 ```
 
 Run the editor language server:
@@ -100,3 +108,5 @@ GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/protolua-darwin-arm64 ./
 ```
 
 The `.pfir.json` output is a stable intermediate representation. The backend record model is documented in [docs/BACKEND.md](docs/BACKEND.md), and editor support is documented in [docs/EDITOR_SUPPORT.md](docs/EDITOR_SUPPORT.md).
+
+The `.brson` writer currently emits the public `FrDT` + LZ4 frame container and a BSON document with a normalized ProtoFlux graph, including ports and wires for data, field references and impulse sequencing. Exact Resonite persistent ProtoFlux component fields are still tracked in [TODO.md](TODO.md).

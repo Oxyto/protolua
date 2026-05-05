@@ -24,17 +24,21 @@ type Param struct {
 }
 
 type LocalStmt struct {
-	Name  string `json:"name"`
-	Type  string `json:"type,omitempty"`
-	Value Expr   `json:"value,omitempty"`
+	Name   string  `json:"name"`
+	Type   string  `json:"type,omitempty"`
+	Value  Expr    `json:"value,omitempty"`
+	Names  []Param `json:"names,omitempty"`
+	Values []Expr  `json:"values,omitempty"`
 }
 
 func (*LocalStmt) node() {}
 func (*LocalStmt) stmt() {}
 
 type AssignStmt struct {
-	Target Expr `json:"target"`
-	Value  Expr `json:"value"`
+	Target  Expr   `json:"target"`
+	Value   Expr   `json:"value"`
+	Targets []Expr `json:"targets,omitempty"`
+	Values  []Expr `json:"values,omitempty"`
 }
 
 func (*AssignStmt) node() {}
@@ -50,6 +54,17 @@ type FunctionStmt struct {
 
 func (*FunctionStmt) node() {}
 func (*FunctionStmt) stmt() {}
+
+type LocalFunctionStmt struct {
+	Name       string  `json:"name"`
+	Params     []Param `json:"params"`
+	ReturnType string  `json:"returnType,omitempty"`
+	Outputs    []Param `json:"outputs,omitempty"`
+	Body       []Stmt  `json:"body"`
+}
+
+func (*LocalFunctionStmt) node() {}
+func (*LocalFunctionStmt) stmt() {}
 
 type EventStmt struct {
 	Name    string  `json:"name"`
@@ -82,6 +97,14 @@ type WhileStmt struct {
 func (*WhileStmt) node() {}
 func (*WhileStmt) stmt() {}
 
+type RepeatStmt struct {
+	Body      []Stmt `json:"body"`
+	Condition Expr   `json:"condition"`
+}
+
+func (*RepeatStmt) node() {}
+func (*RepeatStmt) stmt() {}
+
 type ForStmt struct {
 	Name  string `json:"name"`
 	Start Expr   `json:"start"`
@@ -92,6 +115,16 @@ type ForStmt struct {
 
 func (*ForStmt) node() {}
 func (*ForStmt) stmt() {}
+
+type BreakStmt struct{}
+
+func (*BreakStmt) node() {}
+func (*BreakStmt) stmt() {}
+
+type ContinueStmt struct{}
+
+func (*ContinueStmt) node() {}
+func (*ContinueStmt) stmt() {}
 
 type ReturnStmt struct {
 	Values []Expr `json:"values,omitempty"`
@@ -200,3 +233,13 @@ type CallExpr struct {
 
 func (*CallExpr) node() {}
 func (*CallExpr) expr() {}
+
+type FunctionExpr struct {
+	Params     []Param `json:"params"`
+	ReturnType string  `json:"returnType,omitempty"`
+	Outputs    []Param `json:"outputs,omitempty"`
+	Body       []Stmt  `json:"body"`
+}
+
+func (*FunctionExpr) node() {}
+func (*FunctionExpr) expr() {}

@@ -15,6 +15,7 @@ import (
 
 	"protolua/internal/lexer"
 	"protolua/internal/parser"
+	"protolua/internal/semantic"
 )
 
 var diagnosticRE = regexp.MustCompile(`^(\d+):(\d+):\s*(.*)$`)
@@ -320,7 +321,13 @@ func (s *server) publishDiagnostics(uri string) error {
 	diagnostics := []diagnostic{}
 	tokens, err := lexer.New(source).Lex()
 	if err == nil {
-		_, err = parser.Parse(tokens)
+		program, parseErr := parser.Parse(tokens)
+		err = parseErr
+		if err == nil {
+			for _, sem := range semantic.Analyze(program) {
+				diagnostics = append(diagnostics, diagnosticFromSemantic(sem))
+			}
+		}
 	}
 	if err != nil {
 		diagnostics = append(diagnostics, diagnosticFromError(err))
@@ -352,6 +359,22 @@ func diagnosticFromError(err error) diagnostic {
 		Severity: 1,
 		Source:   "protolua",
 		Message:  msg,
+	}
+}
+
+func diagnosticFromSemantic(sem semantic.Diagnostic) diagnostic {
+	severity := 2
+	if sem.Severity == semantic.Error {
+		severity = 1
+	}
+	return diagnostic{
+		Range: rangeValue{
+			Start: position{Line: 0, Character: 0},
+			End:   position{Line: 0, Character: 1},
+		},
+		Severity: severity,
+		Source:   "protolua",
+		Message:  sem.Message,
 	}
 }
 

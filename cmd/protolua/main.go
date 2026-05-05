@@ -15,6 +15,7 @@ import (
 	"protolua/internal/lexer"
 	"protolua/internal/lsp"
 	"protolua/internal/parser"
+	"protolua/internal/semantic"
 )
 
 func main() {
@@ -36,6 +37,8 @@ func run(args []string) error {
 		return printAST(args[1:])
 	case "compile":
 		return compile(args[1:])
+	case "inspect-brson":
+		return inspectBRSON(args[1:])
 	case "lsp":
 		return lsp.Serve(os.Stdin, os.Stdout)
 	case "help", "-h", "--help":
@@ -56,9 +59,16 @@ func check(args []string) error {
 	if fs.NArg() != 1 {
 		return errors.New("usage: protolua check <file>")
 	}
-	_, err := parseFile(fs.Arg(0))
+	program, err := parseFile(fs.Arg(0))
 	if err != nil {
 		return err
+	}
+	diagnostics := semantic.Analyze(program)
+	for _, diagnostic := range diagnostics {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", diagnostic.Severity, diagnostic.Message)
+	}
+	if semantic.HasErrors(diagnostics) {
+		return errors.New("semantic check failed")
 	}
 	fmt.Println("ok")
 	return nil
@@ -95,6 +105,9 @@ func compile(args []string) error {
 	sourcePath := fs.Arg(0)
 	program, err := parseFile(sourcePath)
 	if err != nil {
+		return err
+	}
+	if err := failOnSemanticErrors(program); err != nil {
 		return err
 	}
 	resolvedFormat, err := resolveFormat(*format, *out)
@@ -172,10 +185,34 @@ func writeCompileOutput(file *os.File, format string, program *ast.Program, sour
 		if err != nil {
 			return err
 		}
-		return backend.WriteExperimentalBRSON(file, record)
+		return backend.WriteBRSON(file, record)
 	default:
 		return fmt.Errorf("unsupported compile format %q", format)
 	}
+}
+
+func inspectBRSON(args []string) error {
+	fs := flag.NewFlagSet("inspect-brson", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: protolua inspect-brson <file>")
+	}
+	f, err := os.Open(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	envelope, err := backend.InspectBRSON(f)
+	if err != nil {
+		return err
+	}
+	return writeJSON(os.Stdout, map[string]any{
+		"archiveType": envelope.ArchiveType,
+		"document":    envelope.Document,
+	})
 }
 
 func parseFile(path string) (*ast.Program, error) {
@@ -190,6 +227,14 @@ func parseFile(path string) (*ast.Program, error) {
 	return parser.Parse(tokens)
 }
 
+func failOnSemanticErrors(program *ast.Program) error {
+	diagnostics := semantic.Analyze(program)
+	if !semantic.HasErrors(diagnostics) {
+		return nil
+	}
+	return errors.New(semantic.Format(diagnostics))
+}
+
 func writeJSON(file *os.File, value any) error {
 	enc := json.NewEncoder(file)
 	enc.SetIndent("", "  ")
@@ -197,5 +242,5 @@ func writeJSON(file *os.File, value any) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: protolua <check|ast|compile|lsp> <file> [options]")
+	fmt.Fprintln(os.Stderr, "usage: protolua <check|ast|compile|inspect-brson|lsp> <file> [options]")
 }
