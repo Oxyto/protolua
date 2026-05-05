@@ -1,0 +1,55 @@
+{
+  "name": "protolua",
+  "displayName": "ProtoLua",
+  "description": "ProtoLua language support: syntax highlighting and LSP diagnostics/completions.",
+  "version": "0.1.0",
+  "publisher": "protolua",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:protolua"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "protolua",
+        "aliases": [
+          "ProtoLua",
+          "protolua"
+        ],
+        "extensions": [
+          ".plua"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "protolua",
+        "scopeName": "source.protolua",
+        "path": "./syntaxes/protolua.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "ProtoLua",
+      "properties": {
+        "protolua.serverPath": {
+          "type": "string",
+          "default": "protolua",
+          "description": "Path to the ProtoLua compiler binary used for `protolua lsp`."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.90.0"
+  }
+}

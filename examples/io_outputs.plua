@@ -1,0 +1,11 @@
+on evaluate(value: float, threshold: float) -> (passed: bool, delta: float) do
+  output passed = value >= threshold
+  output delta = value - threshold
+end
+
+function minmax(a: float, b: float) -> (min: float, max: float)
+  if a < b then
+    return a, b
+  end
+  return b, a
+end

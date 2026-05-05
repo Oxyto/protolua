@@ -1,0 +1,15 @@
+id = "protolua"
+name = "ProtoLua"
+version = "0.1.0"
+schema_version = 1
+authors = ["ProtoLua"]
+description = "ProtoLua language support with LSP and syntax highlighting."
+repository = "https://example.invalid/protolua"
+
+[grammars.protolua]
+repository = "file://./grammars/protolua"
+rev = "main"
+
+[language_servers.protolua]
+name = "ProtoLua LSP"
+languages = ["ProtoLua"]

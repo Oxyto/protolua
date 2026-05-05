@@ -1,0 +1,6 @@
+name = "ProtoLua"
+grammar = "protolua"
+path_suffixes = ["plua"]
+line_comments = ["-- "]
+tab_size = 2
+hard_tabs = false

@@ -37,6 +37,7 @@ Supported front-end features:
 - function calls
 - optional type annotations
 - `on ... do ... end` event entry points
+- event/function inputs and named outputs with `-> (...)`
 - component/field interactions through `pf.*`, `write` and `drive`
 - simple Lua table literals for named ProtoFlux inputs/options
 - numbers, strings, booleans and `nil`
@@ -56,6 +57,24 @@ Compile to the current ProtoLua IR:
 
 ```sh
 go run ./cmd/protolua compile examples/basic.plua -o out.pfir.json
+```
+
+Compile to the backend record model:
+
+```sh
+go run ./cmd/protolua compile examples/flux_component.plua -format record -o out.record.json
+```
+
+Compile to the experimental `.brson` carrier:
+
+```sh
+go run ./cmd/protolua compile examples/flux_component.plua -format brson -o out.brson
+```
+
+Run the editor language server:
+
+```sh
+go run ./cmd/protolua lsp
 ```
 
 Print the parsed AST:
@@ -80,4 +99,4 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o dist/protolua-windows-amd64.
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o dist/protolua-darwin-arm64 ./cmd/protolua
 ```
 
-The `.pfir.json` output is a stable intermediate representation. A future backend can lower this IR into `.brson` without changing the language front-end.
+The `.pfir.json` output is a stable intermediate representation. The backend record model is documented in [docs/BACKEND.md](docs/BACKEND.md), and editor support is documented in [docs/EDITOR_SUPPORT.md](docs/EDITOR_SUPPORT.md).

@@ -49,6 +49,8 @@ func (p *Parser) statement() (ast.Stmt, error) {
 		return p.forStmt()
 	case p.matchKeyword("return"):
 		return p.returnStmt()
+	case p.matchKeyword("output"):
+		return p.outputStmt()
 	case p.matchKeyword("write"):
 		return p.writeStmt()
 	case p.matchKeyword("drive"):
@@ -92,7 +94,7 @@ func (p *Parser) functionStmt() (ast.Stmt, error) {
 	if _, err = p.consumeLexeme(")", "expected ')' after parameters"); err != nil {
 		return nil, err
 	}
-	returnType, err := p.typeAnnotation()
+	outputs, returnType, err := p.outputsOrReturnType()
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +103,7 @@ func (p *Parser) functionStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 	p.advance()
-	return &ast.FunctionStmt{Name: name, Params: params, ReturnType: returnType, Body: body}, nil
+	return &ast.FunctionStmt{Name: name, Params: params, ReturnType: returnType, Outputs: outputs, Body: body}, nil
 }
 
 func (p *Parser) eventStmt() (ast.Stmt, error) {
@@ -119,6 +121,10 @@ func (p *Parser) eventStmt() (ast.Stmt, error) {
 			return nil, err
 		}
 	}
+	outputs, err := p.outputsAnnotation()
+	if err != nil {
+		return nil, err
+	}
 	if _, err = p.consumeKeyword("do", "expected 'do' after event name"); err != nil {
 		return nil, err
 	}
@@ -127,7 +133,7 @@ func (p *Parser) eventStmt() (ast.Stmt, error) {
 		return nil, err
 	}
 	p.advance()
-	return &ast.EventStmt{Name: name, Params: params, Body: body}, nil
+	return &ast.EventStmt{Name: name, Params: params, Outputs: outputs, Body: body}, nil
 }
 
 func (p *Parser) ifStmt() (ast.Stmt, error) {
@@ -226,11 +232,26 @@ func (p *Parser) returnStmt() (ast.Stmt, error) {
 	if p.isBlockTerminator() || p.isAtEnd() {
 		return &ast.ReturnStmt{}, nil
 	}
+	values, err := p.expressionList()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.ReturnStmt{Values: values}, nil
+}
+
+func (p *Parser) outputStmt() (ast.Stmt, error) {
+	name, err := p.consume(lexer.Identifier, "expected output name")
+	if err != nil {
+		return nil, err
+	}
+	if _, err = p.consumeLexeme("=", "expected '=' in output statement"); err != nil {
+		return nil, err
+	}
 	value, err := p.expression()
 	if err != nil {
 		return nil, err
 	}
-	return &ast.ReturnStmt{Value: value}, nil
+	return &ast.OutputStmt{Name: name.Lexeme, Value: value}, nil
 }
 
 func (p *Parser) writeStmt() (ast.Stmt, error) {
@@ -301,6 +322,22 @@ func (p *Parser) blockUntil(terminators ...string) ([]ast.Stmt, error) {
 }
 
 func (p *Parser) expression() (ast.Expr, error) { return p.parsePrecedence(1) }
+
+func (p *Parser) expressionList() ([]ast.Expr, error) {
+	first, err := p.expression()
+	if err != nil {
+		return nil, err
+	}
+	values := []ast.Expr{first}
+	for p.matchPunct(",") {
+		value, err := p.expression()
+		if err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, nil
+}
 
 var precedences = map[string]int{
 	"or": 1, "and": 2,
@@ -524,6 +561,42 @@ func (p *Parser) params() ([]ast.Param, error) {
 		}
 	}
 	return params, nil
+}
+
+func (p *Parser) outputsOrReturnType() ([]ast.Param, string, error) {
+	outputs, err := p.outputsAnnotation()
+	if err != nil {
+		return nil, "", err
+	}
+	if len(outputs) > 0 {
+		return outputs, "", nil
+	}
+	returnType, err := p.typeAnnotation()
+	if err != nil {
+		return nil, "", err
+	}
+	return nil, returnType, nil
+}
+
+func (p *Parser) outputsAnnotation() ([]ast.Param, error) {
+	if !p.matchOp("->") {
+		return nil, nil
+	}
+	if p.matchPunct("(") {
+		outputs, err := p.params()
+		if err != nil {
+			return nil, err
+		}
+		if _, err = p.consumeLexeme(")", "expected ')' after output list"); err != nil {
+			return nil, err
+		}
+		return outputs, nil
+	}
+	typ, err := p.typeName("expected output type after '->'")
+	if err != nil {
+		return nil, err
+	}
+	return []ast.Param{{Name: "value", Type: typ}}, nil
 }
 
 func (p *Parser) typeAnnotation() (string, error) {

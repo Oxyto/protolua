@@ -44,6 +44,7 @@ type FunctionStmt struct {
 	Name       string  `json:"name"`
 	Params     []Param `json:"params"`
 	ReturnType string  `json:"returnType,omitempty"`
+	Outputs    []Param `json:"outputs,omitempty"`
 	Body       []Stmt  `json:"body"`
 }
 
@@ -51,9 +52,10 @@ func (*FunctionStmt) node() {}
 func (*FunctionStmt) stmt() {}
 
 type EventStmt struct {
-	Name   string  `json:"name"`
-	Params []Param `json:"params,omitempty"`
-	Body   []Stmt  `json:"body"`
+	Name    string  `json:"name"`
+	Params  []Param `json:"params,omitempty"`
+	Outputs []Param `json:"outputs,omitempty"`
+	Body    []Stmt  `json:"body"`
 }
 
 func (*EventStmt) node() {}
@@ -92,11 +94,19 @@ func (*ForStmt) node() {}
 func (*ForStmt) stmt() {}
 
 type ReturnStmt struct {
-	Value Expr `json:"value,omitempty"`
+	Values []Expr `json:"values,omitempty"`
 }
 
 func (*ReturnStmt) node() {}
 func (*ReturnStmt) stmt() {}
+
+type OutputStmt struct {
+	Name  string `json:"name"`
+	Value Expr   `json:"value"`
+}
+
+func (*OutputStmt) node() {}
+func (*OutputStmt) stmt() {}
 
 type WriteStmt struct {
 	Target Expr `json:"target"`

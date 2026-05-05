@@ -1,0 +1,96 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "ProtoLua",
+  "scopeName": "source.protolua",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#pf" },
+    { "include": "#types" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-dash.protolua",
+          "match": "--.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.protolua",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.protolua", "match": "\\\\[nt\\\\\"']" }]
+        },
+        {
+          "name": "string.quoted.single.protolua",
+          "begin": "'",
+          "end": "'",
+          "patterns": [{ "name": "constant.character.escape.protolua", "match": "\\\\[nt\\\\\"']" }]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.protolua",
+          "match": "\\b\\d+(\\.\\d+)?\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.protolua",
+          "match": "\\b(and|break|do|else|elseif|end|for|function|if|in|not|on|or|output|repeat|return|then|until|while)\\b"
+        },
+        {
+          "name": "storage.modifier.protolua",
+          "match": "\\b(local|write|drive)\\b"
+        },
+        {
+          "name": "constant.language.protolua",
+          "match": "\\b(true|false|nil)\\b"
+        }
+      ]
+    },
+    "pf": {
+      "patterns": [
+        {
+          "name": "support.namespace.protolua",
+          "match": "\\bpf\\b"
+        },
+        {
+          "name": "support.function.protolua",
+          "match": "\\bpf(\\.[A-Za-z_][A-Za-z0-9_]*)+\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "storage.type.protolua",
+          "match": "\\b(Slot|Component|User|bool|int|float|double|string|float2|float3|float4|color|colorX|quat|rect)\\b"
+        },
+        {
+          "name": "entity.name.type.protolua",
+          "match": "\\b[A-Z][A-Za-z0-9_]*(\\.[A-Z][A-Za-z0-9_]*)*\\b"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.protolua",
+          "match": "(==|~=|<=|>=|->|\\.\\.|[+\\-*/%^#=<>])"
+        }
+      ]
+    }
+  }
+}

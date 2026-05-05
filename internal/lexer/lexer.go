@@ -30,7 +30,19 @@ var keywords = map[string]bool{
 	"end": true, "false": true, "for": true, "function": true, "if": true,
 	"in": true, "local": true, "nil": true, "not": true, "or": true,
 	"repeat": true, "return": true, "then": true, "true": true, "until": true,
-	"while": true, "on": true, "write": true, "drive": true,
+	"while": true, "on": true, "output": true, "write": true, "drive": true,
+}
+
+func IsKeyword(value string) bool {
+	return keywords[value]
+}
+
+func Keywords() []string {
+	out := make([]string, 0, len(keywords))
+	for keyword := range keywords {
+		out = append(out, keyword)
+	}
+	return out
 }
 
 type Lexer struct {
@@ -205,7 +217,7 @@ func isIdentPart(r rune) bool {
 
 func isTwoCharOperator(s string) bool {
 	switch s {
-	case "==", "~=", "<=", ">=", "..":
+	case "==", "~=", "<=", ">=", "..", "->":
 		return true
 	default:
 		return false

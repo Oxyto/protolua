@@ -1,0 +1,12 @@
+[
+  { "token_type": "namespace", "style": ["module", "namespace"] },
+  { "token_type": "type", "style": ["type"] },
+  { "token_type": "event", "style": ["keyword"] },
+  { "token_type": "function", "style": ["function"] },
+  { "token_type": "method", "style": ["function.method", "function"] },
+  { "token_type": "property", "style": ["property"] },
+  { "token_type": "keyword", "style": ["keyword"] },
+  { "token_type": "string", "style": ["string"] },
+  { "token_type": "number", "style": ["number"] },
+  { "token_type": "operator", "style": ["operator"] }
+]

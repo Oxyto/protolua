@@ -30,6 +30,15 @@ function clamp01(value: float): float
 end
 ```
 
+La forme `-> (...)` declare des sorties nommees. Elle est utile pour les events, les helpers ProtoFlux et les groupes qui exposent plusieurs outputs:
+
+```lua
+on compute(a: float, b: float) -> (sum: float, product: float) do
+  output sum = a + b
+  output product = a * b
+end
+```
+
 ## Types optionnels
 
 Les annotations sont facultatives:
@@ -70,6 +79,22 @@ write text.Content = "Ready" -- forme explicite equivalente
 ```lua
 function distance(a: float3, b: float3): float
   return pf.node("Operators.Distance", { A = a, B = b })
+end
+```
+
+Sortie unique avec `->`:
+
+```lua
+function is_visible(slot: Slot) -> bool
+  return pf.source(slot.ActiveSelf)
+end
+```
+
+Sorties multiples:
+
+```lua
+function divmod(value: int, divisor: int) -> (quotient: int, remainder: int)
+  return value / divisor, value % divisor
 end
 ```
 
@@ -118,8 +143,17 @@ on start do
   pf.debug_log("started")
 end
 
-on update(deltaTime: float) do
+on update(deltaTime: float, frameIndex: int) do
   drive spinner.Rotation = quat(0, deltaTime, 0, 1)
+end
+```
+
+Les inputs multiples sont declares comme les parametres d'une fonction. Les outputs multiples utilisent `-> (...)` et sont alimentes par `output`:
+
+```lua
+on evaluate(value: float, threshold: float) -> (passed: bool, delta: float) do
+  output passed = value >= threshold
+  output delta = value - threshold
 end
 ```
 
@@ -360,6 +394,41 @@ Packing:
 ```lua
 pf.pack(root, { name = "ProtoLuaGraph" })
 pf.unpack(root)
+```
+
+## Inputs et outputs
+
+Les entrees de fonctions et d'events sont des parametres:
+
+```lua
+on update(deltaTime: float, frameIndex: int, user: User) do
+  pf.debug_log(deltaTime)
+end
+```
+
+Les sorties se declarent avec `->`:
+
+```lua
+on raycast(origin: float3, direction: float3) -> (hit: bool, point: float3) do
+  local result = pf.node("Physics.Raycast", {
+    Origin = origin,
+    Direction = direction,
+  })
+
+  output hit = result.Hit
+  output point = result.Point
+end
+```
+
+Dans une fonction, `return` peut renvoyer plusieurs valeurs:
+
+```lua
+function minmax(a: float, b: float) -> (min: float, max: float)
+  if a < b then
+    return a, b
+  end
+  return b, a
+end
 ```
 
 ## Exemple complet

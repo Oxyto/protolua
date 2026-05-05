@@ -60,9 +60,16 @@ func (b *Builder) lowerStmt(stmt ast.Stmt) Node {
 		if s.ReturnType != "" {
 			inputs["returnType"] = s.ReturnType
 		}
+		if len(s.Outputs) > 0 {
+			inputs["outputs"] = s.Outputs
+		}
 		return b.node("Function", inputs, b.lowerStatements(s.Body), nil)
 	case *ast.EventStmt:
-		return b.node("Event", map[string]any{"name": s.Name, "params": s.Params}, b.lowerStatements(s.Body), nil)
+		inputs := map[string]any{"name": s.Name, "params": s.Params}
+		if len(s.Outputs) > 0 {
+			inputs["outputs"] = s.Outputs
+		}
+		return b.node("Event", inputs, b.lowerStatements(s.Body), nil)
 	case *ast.IfStmt:
 		var currentElse []Node
 		if len(s.ElseBody) > 0 {
@@ -83,7 +90,17 @@ func (b *Builder) lowerStmt(stmt ast.Stmt) Node {
 			"step":  b.lowerExpr(s.Step),
 		}, b.lowerStatements(s.Body), nil)
 	case *ast.ReturnStmt:
-		return b.node("Return", map[string]any{"value": b.lowerExpr(s.Value)}, nil, nil)
+		values := make([]any, 0, len(s.Values))
+		for _, value := range s.Values {
+			values = append(values, b.lowerExpr(value))
+		}
+		inputs := map[string]any{"values": values}
+		if len(values) == 1 {
+			inputs["value"] = values[0]
+		}
+		return b.node("Return", inputs, nil, nil)
+	case *ast.OutputStmt:
+		return b.node("Output", map[string]any{"name": s.Name, "value": b.lowerExpr(s.Value)}, nil, nil)
 	case *ast.WriteStmt:
 		return b.node("ProtoFluxWrite", map[string]any{"target": b.lowerExpr(s.Target), "value": b.lowerExpr(s.Value)}, nil, nil)
 	case *ast.DriveStmt:
