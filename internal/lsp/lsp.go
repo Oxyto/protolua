@@ -76,6 +76,21 @@ type semanticTokensParams struct {
 	TextDocument versionedTextDocumentIdentifier `json:"textDocument"`
 }
 
+type signatureHelp struct {
+	Signatures      []signatureInformation `json:"signatures"`
+	ActiveSignature int                    `json:"activeSignature"`
+	ActiveParameter int                    `json:"activeParameter"`
+}
+
+type signatureInformation struct {
+	Label      string                 `json:"label"`
+	Parameters []parameterInformation `json:"parameters,omitempty"`
+}
+
+type parameterInformation struct {
+	Label string `json:"label"`
+}
+
 type position struct {
 	Line      int `json:"line"`
 	Character int `json:"character"`
@@ -236,6 +251,10 @@ func (s *server) handle(msg message) error {
 					"triggerCharacters": []string{".", ":", "_"},
 				},
 				"hoverProvider": true,
+				"signatureHelpProvider": map[string]any{
+					"triggerCharacters":   []string{"(", ","},
+					"retriggerCharacters": []string{","},
+				},
 				"semanticTokensProvider": map[string]any{
 					"legend": map[string]any{
 						"tokenTypes":     tokenTypes,
@@ -282,6 +301,12 @@ func (s *server) handle(msg message) error {
 			return err
 		}
 		return s.respond(msg.ID, s.hover(params))
+	case "textDocument/signatureHelp":
+		var params textDocumentPositionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return err
+		}
+		return s.respond(msg.ID, s.signatureHelp(params))
 	case "textDocument/semanticTokens/full":
 		var params semanticTokensParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -418,6 +443,114 @@ func (s *server) hover(params textDocumentPositionParams) any {
 			"value": detail,
 		},
 	}
+}
+
+func (s *server) signatureHelp(params textDocumentPositionParams) any {
+	source := s.documents[params.TextDocument.URI]
+	name, active := callAt(source, params.Position)
+	if name == "" {
+		return nil
+	}
+	signature, ok := semantic.LookupProtoFluxSignature(name)
+	if !ok {
+		return nil
+	}
+	parameters := make([]parameterInformation, 0, signature.Max)
+	count := signature.Max
+	if count == signature.Min {
+		for i := 1; i <= count; i++ {
+			parameters = append(parameters, parameterInformation{Label: fmt.Sprintf("arg%d", i)})
+		}
+	} else {
+		for i := 1; i <= count; i++ {
+			label := fmt.Sprintf("arg%d", i)
+			if i > signature.Min {
+				label += "?"
+			}
+			parameters = append(parameters, parameterInformation{Label: label})
+		}
+	}
+	if active >= len(parameters) && len(parameters) > 0 {
+		active = len(parameters) - 1
+	}
+	return signatureHelp{
+		Signatures: []signatureInformation{{
+			Label:      signatureLabel(signature),
+			Parameters: parameters,
+		}},
+		ActiveSignature: 0,
+		ActiveParameter: active,
+	}
+}
+
+func signatureLabel(signature semantic.ProtoFluxSignature) string {
+	if signature.Min == signature.Max {
+		args := make([]string, 0, signature.Min)
+		for i := 1; i <= signature.Min; i++ {
+			args = append(args, fmt.Sprintf("arg%d", i))
+		}
+		return fmt.Sprintf("%s(%s)", signature.Path, strings.Join(args, ", "))
+	}
+	args := make([]string, 0, signature.Max)
+	for i := 1; i <= signature.Max; i++ {
+		label := fmt.Sprintf("arg%d", i)
+		if i > signature.Min {
+			label += "?"
+		}
+		args = append(args, label)
+	}
+	return fmt.Sprintf("%s(%s)", signature.Path, strings.Join(args, ", "))
+}
+
+func callAt(source string, pos position) (string, int) {
+	lines := strings.Split(source, "\n")
+	if pos.Line < 0 || pos.Line >= len(lines) {
+		return "", 0
+	}
+	prefixLines := append([]string{}, lines[:pos.Line]...)
+	line := []rune(lines[pos.Line])
+	if pos.Character < 0 {
+		pos.Character = 0
+	}
+	if pos.Character > len(line) {
+		pos.Character = len(line)
+	}
+	prefixLines = append(prefixLines, string(line[:pos.Character]))
+	prefix := strings.Join(prefixLines, "\n")
+	depth := 0
+	active := 0
+	for i := len(prefix) - 1; i >= 0; i-- {
+		switch prefix[i] {
+		case ')':
+			depth++
+		case '(':
+			if depth == 0 {
+				return callNameBefore(prefix[:i]), active
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				active++
+			}
+		}
+	}
+	return "", 0
+}
+
+func callNameBefore(prefix string) string {
+	i := len(prefix) - 1
+	for i >= 0 && unicode.IsSpace(rune(prefix[i])) {
+		i--
+	}
+	end := i + 1
+	for i >= 0 {
+		r := rune(prefix[i])
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '.') {
+			break
+		}
+		i--
+	}
+	return prefix[i+1 : end]
 }
 
 func hoverText(word string) string {

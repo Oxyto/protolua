@@ -25,11 +25,12 @@ type Analyzer struct {
 
 type scope struct {
 	parent  *scope
-	symbols map[string]bool
+	symbols map[string]string
 }
 
 type context struct {
 	outputs      map[string]bool
+	outputTypes  map[string]string
 	outputOrder  []string
 	outputWrites map[string]bool
 	inFunction   bool
@@ -38,6 +39,12 @@ type context struct {
 type pfSignature struct {
 	min int
 	max int
+}
+
+type ProtoFluxSignature struct {
+	Path string
+	Min  int
+	Max  int
 }
 
 var builtins = map[string]bool{
@@ -155,17 +162,21 @@ func Format(diagnostics []Diagnostic) string {
 }
 
 func newScope(parent *scope) *scope {
-	return &scope{parent: parent, symbols: map[string]bool{}}
+	return &scope{parent: parent, symbols: map[string]string{}}
 }
 
-func (s *scope) define(name string) bool {
+func (s *scope) define(name string, typ ...string) bool {
 	if name == "" {
 		return true
 	}
-	if s.symbols[name] {
+	if _, ok := s.symbols[name]; ok {
 		return false
 	}
-	s.symbols[name] = true
+	if len(typ) > 0 {
+		s.symbols[name] = typ[0]
+	} else {
+		s.symbols[name] = ""
+	}
 	return true
 }
 
@@ -173,13 +184,39 @@ func (s *scope) has(name string) bool {
 	if name == "" {
 		return true
 	}
-	if s.symbols[name] {
+	if _, ok := s.symbols[name]; ok {
 		return true
 	}
 	if s.parent != nil {
 		return s.parent.has(name)
 	}
 	return false
+}
+
+func (s *scope) typeOf(name string) string {
+	if name == "" {
+		return ""
+	}
+	if typ, ok := s.symbols[name]; ok {
+		return typ
+	}
+	if s.parent != nil {
+		return s.parent.typeOf(name)
+	}
+	return ""
+}
+
+func (s *scope) assignType(name, typ string) {
+	if name == "" || typ == "" {
+		return
+	}
+	if _, ok := s.symbols[name]; ok {
+		s.symbols[name] = typ
+		return
+	}
+	if s.parent != nil && s.parent.has(name) {
+		s.parent.assignType(name, typ)
+	}
 }
 
 func (a *Analyzer) statements(stmts []ast.Stmt, current *scope, ctx *context) {
@@ -202,8 +239,17 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 		if len(names) == 0 {
 			names = []ast.Param{{Name: s.Name, Type: s.Type}}
 		}
-		for _, name := range names {
-			if !current.define(name.Name) {
+		for i, name := range names {
+			typ := name.Type
+			if i < len(values) {
+				valueType := a.inferExprType(values[i], current)
+				if typ == "" {
+					typ = valueType
+				} else {
+					a.checkAssignableType(typ, valueType, fmt.Sprintf("local %q", name.Name), name.Name)
+				}
+			}
+			if !current.define(name.Name, typ) {
 				a.add(Error, fmt.Sprintf("variable %q is already declared in this scope", name.Name), name.Name)
 			}
 		}
@@ -216,10 +262,17 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 		if len(values) == 0 && s.Value != nil {
 			values = []ast.Expr{s.Value}
 		}
-		for _, target := range targets {
+		for i, target := range targets {
 			if ident, ok := target.(*ast.Identifier); ok {
 				if !current.has(ident.Name) {
 					a.add(Error, fmt.Sprintf("assignment to undeclared variable %q", ident.Name), ident.Name)
+				} else if i < len(values) {
+					valueType := a.inferExprType(values[i], current)
+					existing := current.typeOf(ident.Name)
+					a.checkAssignableType(existing, valueType, fmt.Sprintf("assignment to %q", ident.Name), ident.Name)
+					if existing == "" {
+						current.assignType(ident.Name, valueType)
+					}
 				}
 			} else {
 				a.expr(target, current)
@@ -231,7 +284,7 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 	case *ast.FunctionStmt:
 		fnScope := newScope(current)
 		for _, param := range s.Params {
-			if !fnScope.define(param.Name) {
+			if !fnScope.define(param.Name, param.Type) {
 				a.add(Error, fmt.Sprintf("parameter %q is already declared", param.Name), param.Name)
 			}
 		}
@@ -244,7 +297,7 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 		}
 		fnScope := newScope(current)
 		for _, param := range s.Params {
-			if !fnScope.define(param.Name) {
+			if !fnScope.define(param.Name, param.Type) {
 				a.add(Error, fmt.Sprintf("parameter %q is already declared", param.Name), param.Name)
 			}
 		}
@@ -254,7 +307,7 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 	case *ast.EventStmt:
 		eventScope := newScope(current)
 		for _, param := range s.Params {
-			if !eventScope.define(param.Name) {
+			if !eventScope.define(param.Name, param.Type) {
 				a.add(Error, fmt.Sprintf("event input %q is already declared", param.Name), param.Name)
 			}
 		}
@@ -278,11 +331,15 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 		a.expr(s.End, current)
 		a.expr(s.Step, current)
 		forScope := newScope(current)
-		forScope.define(s.Name)
+		forScope.define(s.Name, "number")
 		a.statements(s.Body, forScope, ctx)
 	case *ast.ReturnStmt:
-		for _, value := range s.Values {
+		for i, value := range s.Values {
 			a.expr(value, current)
+			if ctx != nil && ctx.inFunction && i < len(ctx.outputOrder) {
+				output := ctx.outputOrder[i]
+				a.checkAssignableType(ctx.outputTypes[output], a.inferExprType(value, current), "return value", output)
+			}
 		}
 		if ctx != nil && ctx.inFunction && len(ctx.outputOrder) > 0 {
 			if len(s.Values) != len(ctx.outputOrder) {
@@ -300,6 +357,7 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 			a.add(Error, fmt.Sprintf("output %q is not declared in this block signature", s.Name), s.Name)
 			return
 		}
+		a.checkAssignableType(ctx.outputTypes[s.Name], a.inferExprType(s.Value, current), fmt.Sprintf("output %q", s.Name), s.Name)
 		ctx.outputWrites[s.Name] = true
 	case *ast.WriteStmt:
 		a.expr(s.Target, current)
@@ -316,11 +374,13 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 func newContext(outputs []ast.Param, inFunction bool) *context {
 	ctx := &context{
 		outputs:      map[string]bool{},
+		outputTypes:  map[string]string{},
 		outputWrites: map[string]bool{},
 		inFunction:   inFunction,
 	}
 	for _, output := range outputs {
 		ctx.outputs[output.Name] = true
+		ctx.outputTypes[output.Name] = output.Type
 		ctx.outputOrder = append(ctx.outputOrder, output.Name)
 	}
 	return ctx
@@ -364,7 +424,7 @@ func (a *Analyzer) expr(expr ast.Expr, current *scope) {
 	case *ast.FunctionExpr:
 		fnScope := newScope(current)
 		for _, param := range e.Params {
-			if !fnScope.define(param.Name) {
+			if !fnScope.define(param.Name, param.Type) {
 				a.add(Error, fmt.Sprintf("parameter %q is already declared", param.Name), param.Name)
 			}
 		}
@@ -412,6 +472,17 @@ func semanticProtoFluxAlias(path string) (string, bool) {
 	}
 }
 
+func LookupProtoFluxSignature(path string) (ProtoFluxSignature, bool) {
+	if alias, ok := semanticProtoFluxAlias(path); ok {
+		path = alias
+	}
+	signature, ok := pfSignatures[path]
+	if !ok {
+		return ProtoFluxSignature{}, false
+	}
+	return ProtoFluxSignature{Path: path, Min: signature.min, Max: signature.max}, true
+}
+
 func (a *Analyzer) checkProtoFluxArity(path string, got int) {
 	signature, ok := pfSignatures[path]
 	if !ok {
@@ -423,6 +494,141 @@ func (a *Analyzer) checkProtoFluxArity(path string, got int) {
 			expected = fmt.Sprintf("%d..%d", signature.min, signature.max)
 		}
 		a.add(Error, fmt.Sprintf("%s expects %s argument(s), got %d", path, expected, got), path)
+	}
+}
+
+func (a *Analyzer) inferExprType(expr ast.Expr, current *scope) string {
+	if expr == nil {
+		return ""
+	}
+	switch e := expr.(type) {
+	case *ast.Identifier:
+		return current.typeOf(e.Name)
+	case *ast.Literal:
+		switch e.Kind {
+		case "boolean":
+			return "bool"
+		case "number":
+			if strings.Contains(e.Value, ".") {
+				return "float"
+			}
+			return "int"
+		case "string":
+			return "string"
+		case "nil":
+			return "nil"
+		default:
+			return ""
+		}
+	case *ast.UnaryExpr:
+		right := a.inferExprType(e.Right, current)
+		switch e.Op {
+		case "not":
+			return "bool"
+		case "-", "#":
+			return right
+		default:
+			return ""
+		}
+	case *ast.BinaryExpr:
+		left := a.inferExprType(e.Left, current)
+		right := a.inferExprType(e.Right, current)
+		switch e.Op {
+		case "==", "~=", "<", "<=", ">", ">=", "and", "or":
+			return "bool"
+		case "..":
+			return "string"
+		case "+", "-", "*", "/", "%", "^":
+			return numericResultType(left, right)
+		default:
+			return ""
+		}
+	case *ast.TableExpr:
+		return "table"
+	case *ast.CallExpr:
+		path := strings.Join(callPath(e.Callee), ".")
+		switch path {
+		case "bool":
+			return "bool"
+		case "int":
+			return "int"
+		case "float":
+			return "float"
+		case "double":
+			return "double"
+		case "string":
+			return "string"
+		case "color":
+			return "color"
+		case "float2", "Vector2":
+			return "float2"
+		case "float3", "Vector3":
+			return "float3"
+		case "float4", "Vector4":
+			return "float4"
+		case "quat":
+			return "quat"
+		case "root", "this", "slot", "pf.root", "pf.this", "pf.slot":
+			return "Slot"
+		case "pf.component":
+			return "Component"
+		default:
+			return ""
+		}
+	default:
+		return ""
+	}
+}
+
+func numericResultType(left, right string) string {
+	left = normalizeType(left)
+	right = normalizeType(right)
+	if left == "double" || right == "double" {
+		return "double"
+	}
+	if left == "float" || right == "float" || left == "number" || right == "number" {
+		return "float"
+	}
+	if left == "int" && right == "int" {
+		return "int"
+	}
+	return ""
+}
+
+func (a *Analyzer) checkAssignableType(want, got, context, symbol string) {
+	want = normalizeType(want)
+	got = normalizeType(got)
+	if want == "" || got == "" || got == "nil" {
+		return
+	}
+	if want == got {
+		return
+	}
+	if isNumericType(want) && isNumericType(got) {
+		return
+	}
+	a.add(Error, fmt.Sprintf("%s expects %s, got %s", context, want, got), symbol)
+}
+
+func normalizeType(typ string) string {
+	switch strings.ToLower(typ) {
+	case "boolean":
+		return "bool"
+	case "number":
+		return "float"
+	case "integer":
+		return "int"
+	default:
+		return typ
+	}
+}
+
+func isNumericType(typ string) bool {
+	switch typ {
+	case "int", "float", "double":
+		return true
+	default:
+		return false
 	}
 }
 

@@ -52,8 +52,8 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 - [x] Mauvais nombre d'arguments sur `pf.*` pour les helpers connus.
 - [x] Outputs declares mais jamais assignes.
 - [x] `output` vers un nom non declare.
-- [ ] Incompatibilites de types simples.
-- [ ] Inference de types locale pour eviter d'ecrire des annotations partout.
+- [x] Incompatibilites de types simples.
+- [x] Inference de types locale pour eviter d'ecrire des annotations partout.
 - [ ] Verification des fields de components selon le type reel du component.
 - [ ] Verification des tables d'options `pf.*` et des ports nommes de `pf.node`.
 - [ ] Verification des retours multiples et outputs multiples dans tous les chemins de controle.
@@ -77,7 +77,7 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 - [x] Ajouter une commande de verification `check --profile lua-compatible` qui refuse les sucres non Lua standard.
 - [x] `repeat ... until`.
 - [x] `break` et `continue`.
-- [ ] Tables plus completes: index numeriques, champs imbriques, champs implicites, trailing separators partout.
+- [x] Tables plus completes: index numeriques, champs imbriques, champs implicites, trailing separators partout.
 - [x] Supporter les commentaires Lua longs `--[[ ... ]]`.
 - [x] Supporter les fonctions locales `local function name(...) ... end`.
 - [x] Supporter les appels et affectations multiples Lua-like (`local a, b = ...`, `a, b = b, a`).
@@ -94,7 +94,7 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 - [x] Completion mots-cles/types/`pf.*`/aliases Lua-compatible.
 - [x] Semantic tokens.
 - [x] Diagnostics semantiques de base.
-- [ ] Signature help pour `pf.*`.
+- [x] Signature help pour `pf.*`.
 - [ ] Go-to-definition.
 - [ ] Rename symbol.
 - [ ] Format document.
@@ -109,7 +109,7 @@ Fichier de suivi des choses restantes avant un compilateur ProtoLua utilisable e
 
 ## Distribution
 
-- [ ] Builds `CGO_ENABLED=0` Linux/macOS/Windows.
-- [ ] Checksums de release.
-- [ ] CI de tests.
-- [ ] CI de cross-compilation.
+- [x] Builds `CGO_ENABLED=0` Linux/macOS/Windows.
+- [x] Checksums de release.
+- [x] CI de tests.
+- [x] CI de cross-compilation.

@@ -73,6 +73,28 @@ end
 	}
 }
 
+func TestAnalyzeSimpleTypeInferenceAndMismatches(t *testing.T) {
+	diagnostics := analyzeSource(t, `
+function typed(value: float) -> (ok: bool, amount: float)
+  local label: string = 12
+  local inferred = true
+  inferred = "no"
+  output ok = value
+  output amount = value + 1
+end
+`)
+	messages := Format(diagnostics)
+	for _, expected := range []string{
+		`local "label" expects string, got int`,
+		`assignment to "inferred" expects bool, got string`,
+		`output "ok" expects bool, got float`,
+	} {
+		if !strings.Contains(messages, expected) {
+			t.Fatalf("expected diagnostic %q in:\n%s", expected, messages)
+		}
+	}
+}
+
 func analyzeSource(t *testing.T, source string) []Diagnostic {
 	t.Helper()
 	tokens, err := lexer.New(source).Lex()
