@@ -1,0 +1,17 @@
+---@param value float
+---@return clamped float
+function clamp01(value)
+  return math.max(0, math.min(1, value))
+end
+
+events.start = function()
+  local rootSlot = root()
+  local text = rootSlot:find("UI"):child("Label"):component("FrooxEngine.UIX.Text")
+  local score = clamp01(1.25)
+
+  write(text.Content, string.format("Score: {0}", score))
+  node("Actions.Write", {
+    Variable = text.Content,
+    Value = "Ready",
+  })
+end

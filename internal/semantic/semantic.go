@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"protolua/internal/ast"
+	"protolua/internal/protoflux"
 )
 
 const (
@@ -18,9 +19,14 @@ type Diagnostic struct {
 	Symbol   string
 }
 
+type Options struct {
+	Strict bool
+}
+
 type Analyzer struct {
 	diagnostics []Diagnostic
 	functions   map[string]bool
+	options     Options
 }
 
 type scope struct {
@@ -72,6 +78,9 @@ var builtins = map[string]bool{
 	"Vector2": true,
 	"Vector3": true,
 	"Vector4": true,
+	"math":    true,
+	"table":   true,
+	"require": true,
 }
 
 var pfSignatures = map[string]pfSignature{
@@ -128,8 +137,32 @@ var pfSignatures = map[string]pfSignature{
 	"pf.dyn.drive":           {min: 3, max: 4},
 }
 
+var stdlibSignatures = map[string]pfSignature{
+	"math.abs":      {min: 1, max: 1},
+	"math.min":      {min: 2, max: 2},
+	"math.max":      {min: 2, max: 2},
+	"math.floor":    {min: 1, max: 1},
+	"math.ceil":     {min: 1, max: 1},
+	"math.sqrt":     {min: 1, max: 1},
+	"math.sin":      {min: 1, max: 1},
+	"math.cos":      {min: 1, max: 1},
+	"math.tan":      {min: 1, max: 1},
+	"math.rad":      {min: 1, max: 1},
+	"math.deg":      {min: 1, max: 1},
+	"string.len":    {min: 1, max: 1},
+	"string.sub":    {min: 2, max: 3},
+	"string.find":   {min: 2, max: 2},
+	"string.format": {min: 1, max: 32},
+	"table.insert":  {min: 2, max: 3},
+	"table.remove":  {min: 1, max: 2},
+}
+
 func Analyze(program *ast.Program) []Diagnostic {
-	a := &Analyzer{functions: map[string]bool{}}
+	return AnalyzeWithOptions(program, Options{})
+}
+
+func AnalyzeWithOptions(program *ast.Program, options Options) []Diagnostic {
+	a := &Analyzer{functions: map[string]bool{}, options: options}
 	root := newScope(nil)
 	for name := range builtins {
 		root.define(name)
@@ -247,6 +280,9 @@ func (a *Analyzer) statement(stmt ast.Stmt, current *scope, ctx *context) {
 					typ = valueType
 				} else {
 					a.checkAssignableType(typ, valueType, fmt.Sprintf("local %q", name.Name), name.Name)
+					if isGenericComponentType(typ) && isSpecificComponentType(valueType) {
+						typ = valueType
+					}
 				}
 			}
 			if !current.define(name.Name, typ) {
@@ -416,6 +452,7 @@ func (a *Analyzer) expr(expr ast.Expr, current *scope) {
 		a.expr(e.Right, current)
 	case *ast.MemberExpr:
 		a.expr(e.Object, current)
+		a.checkComponentField(e, current)
 	case *ast.IndexExpr:
 		a.expr(e.Object, current)
 		a.expr(e.Index, current)
@@ -436,14 +473,50 @@ func (a *Analyzer) expr(expr ast.Expr, current *scope) {
 
 func (a *Analyzer) call(call *ast.CallExpr, current *scope) {
 	if path := strings.Join(callPath(call.Callee), "."); strings.HasPrefix(path, "pf.") {
-		a.checkProtoFluxArity(path, len(call.Args))
+		a.checkProtoFluxCall(path, call)
 	} else if alias, ok := semanticProtoFluxAlias(path); ok {
-		a.checkProtoFluxArity(alias, len(call.Args))
+		a.checkProtoFluxCall(alias, call)
+	} else if isStdlibPath(path) {
+		a.checkStdlibCall(path, len(call.Args))
 	} else {
 		a.expr(call.Callee, current)
 	}
 	for _, arg := range call.Args {
 		a.expr(arg, current)
+	}
+}
+
+func isStdlibPath(path string) bool {
+	return strings.HasPrefix(path, "math.") || strings.HasPrefix(path, "string.") || strings.HasPrefix(path, "table.")
+}
+
+func (a *Analyzer) checkStdlibCall(path string, got int) {
+	signature, ok := stdlibSignatures[path]
+	if !ok {
+		if a.options.Strict {
+			a.add(Error, fmt.Sprintf("unknown Lua stdlib function %q in strict mode", path), path)
+		}
+		return
+	}
+	if got < signature.min || got > signature.max {
+		expected := fmt.Sprintf("%d", signature.min)
+		if signature.max != signature.min {
+			expected = fmt.Sprintf("%d..%d", signature.min, signature.max)
+		}
+		a.add(Error, fmt.Sprintf("%s expects %s argument(s), got %d", path, expected, got), path)
+	}
+}
+
+func (a *Analyzer) checkProtoFluxCall(path string, call *ast.CallExpr) {
+	a.checkProtoFluxArity(path, len(call.Args))
+	if _, ok := pfSignatures[path]; !ok && a.options.Strict {
+		a.add(Error, fmt.Sprintf("unknown ProtoFlux intrinsic %q in strict mode", path), path)
+	}
+	switch path {
+	case "pf.node":
+		a.checkProtoFluxNode(call)
+	default:
+		a.checkProtoFluxOptions(path, call)
 	}
 }
 
@@ -497,6 +570,81 @@ func (a *Analyzer) checkProtoFluxArity(path string, got int) {
 	}
 }
 
+func (a *Analyzer) checkProtoFluxNode(call *ast.CallExpr) {
+	if len(call.Args) == 0 {
+		return
+	}
+	literal, ok := call.Args[0].(*ast.Literal)
+	if !ok || literal.Kind != "string" {
+		return
+	}
+	resolved := protoflux.Resolve(literal.Value)
+	if !resolved.Known {
+		if a.options.Strict {
+			a.add(Error, fmt.Sprintf("unknown ProtoFlux node %q in strict mode", literal.Value), literal.Value)
+		}
+		return
+	}
+	node, ok := protoflux.Lookup(resolved.Canonical)
+	if !ok {
+		return
+	}
+	if len(call.Args) > 1 {
+		table, ok := call.Args[1].(*ast.TableExpr)
+		if ok {
+			allowed := portSet(node.Inputs)
+			for _, field := range table.Fields {
+				if field.Key == "" || allowed[field.Key] {
+					continue
+				}
+				a.add(a.strictSeverity(), fmt.Sprintf("node %s has no input port %q", resolved.Canonical, field.Key), field.Key)
+			}
+		}
+	}
+}
+
+func (a *Analyzer) checkProtoFluxOptions(path string, call *ast.CallExpr) {
+	optionIndex := protoFluxOptionIndex(path)
+	if optionIndex < 0 || optionIndex >= len(call.Args) {
+		return
+	}
+	table, ok := call.Args[optionIndex].(*ast.TableExpr)
+	if !ok {
+		return
+	}
+	allowed := map[string]bool{
+		"direct":        true,
+		"nonPersistent": true,
+		"persistent":    true,
+		"name":          true,
+		"type":          true,
+		"generic":       true,
+		"position":      true,
+		"color":         true,
+	}
+	for _, field := range table.Fields {
+		if field.Key == "" || allowed[field.Key] {
+			continue
+		}
+		a.add(a.strictSeverity(), fmt.Sprintf("%s options do not define %q", path, field.Key), field.Key)
+	}
+}
+
+func protoFluxOptionIndex(path string) int {
+	switch path {
+	case "pf.create_slot", "pf.component", "pf.components", "pf.add_component":
+		return 2
+	case "pf.dyn.input", "pf.dyn.input_events", "pf.dyn.space":
+		return 2
+	case "pf.dyn.create", "pf.dyn.write_or_create", "pf.dyn.drive":
+		return 3
+	case "pf.pack":
+		return 1
+	default:
+		return -1
+	}
+}
+
 func (a *Analyzer) inferExprType(expr ast.Expr, current *scope) string {
 	if expr == nil {
 		return ""
@@ -545,6 +693,12 @@ func (a *Analyzer) inferExprType(expr ast.Expr, current *scope) string {
 		}
 	case *ast.TableExpr:
 		return "table"
+	case *ast.MemberExpr:
+		objectType := a.inferExprType(e.Object, current)
+		if isSpecificComponentType(objectType) {
+			return componentFieldType(componentName(objectType), e.Name)
+		}
+		return ""
 	case *ast.CallExpr:
 		path := strings.Join(callPath(e.Callee), ".")
 		switch path {
@@ -568,11 +722,41 @@ func (a *Analyzer) inferExprType(expr ast.Expr, current *scope) string {
 			return "float4"
 		case "quat":
 			return "quat"
+		case "require":
+			return "module"
+		case "math.abs", "math.min", "math.max", "math.sqrt", "math.sin", "math.cos", "math.tan", "math.rad", "math.deg":
+			return "float"
+		case "math.floor", "math.ceil":
+			return "int"
+		case "string.len", "string.find":
+			return "int"
+		case "string.sub", "string.format":
+			return "string"
+		case "table.insert", "table.remove":
+			return "nil"
 		case "root", "this", "slot", "pf.root", "pf.this", "pf.slot":
 			return "Slot"
 		case "pf.component":
+			if len(e.Args) >= 2 {
+				if literal, ok := e.Args[1].(*ast.Literal); ok && literal.Kind == "string" {
+					return componentType(literal.Value)
+				}
+			}
 			return "Component"
 		default:
+			if member, ok := e.Callee.(*ast.MemberExpr); ok && member.Method {
+				switch member.Name {
+				case "component", "add_component":
+					if len(e.Args) >= 1 {
+						if literal, ok := e.Args[0].(*ast.Literal); ok && literal.Kind == "string" {
+							return componentType(literal.Value)
+						}
+					}
+					return "Component"
+				case "find", "find_slot", "child", "parent", "slot", "get_slot":
+					return "Slot"
+				}
+			}
 			return ""
 		}
 	default:
@@ -604,6 +788,12 @@ func (a *Analyzer) checkAssignableType(want, got, context, symbol string) {
 	if want == got {
 		return
 	}
+	if isGenericComponentType(want) && isSpecificComponentType(got) {
+		return
+	}
+	if isSpecificComponentType(want) && isGenericComponentType(got) {
+		return
+	}
 	if isNumericType(want) && isNumericType(got) {
 		return
 	}
@@ -630,6 +820,91 @@ func isNumericType(typ string) bool {
 	default:
 		return false
 	}
+}
+
+func (a *Analyzer) checkComponentField(expr *ast.MemberExpr, current *scope) {
+	objectType := a.inferExprType(expr.Object, current)
+	if !isSpecificComponentType(objectType) {
+		return
+	}
+	component := componentName(objectType)
+	if componentFieldKnown(component, expr.Name) {
+		return
+	}
+	a.add(a.strictSeverity(), fmt.Sprintf("component %s has no known field %q", component, expr.Name), expr.Name)
+}
+
+func (a *Analyzer) strictSeverity() string {
+	if a.options.Strict {
+		return Error
+	}
+	return Warning
+}
+
+func portSet(ports []string) map[string]bool {
+	out := map[string]bool{}
+	for _, port := range ports {
+		if port == "" || port == "*" {
+			continue
+		}
+		out[port] = true
+	}
+	return out
+}
+
+func componentType(name string) string {
+	if name == "" {
+		return "Component"
+	}
+	return "Component:" + name
+}
+
+func isGenericComponentType(typ string) bool {
+	return normalizeType(typ) == "Component"
+}
+
+func isSpecificComponentType(typ string) bool {
+	return strings.HasPrefix(typ, "Component:")
+}
+
+func componentName(typ string) string {
+	return strings.TrimPrefix(typ, "Component:")
+}
+
+func componentFieldKnown(component, field string) bool {
+	fields, ok := componentFields[component]
+	if !ok {
+		return false
+	}
+	return fields[field] != ""
+}
+
+func componentFieldType(component, field string) string {
+	fields, ok := componentFields[component]
+	if !ok {
+		return ""
+	}
+	return fields[field]
+}
+
+var componentFields = map[string]map[string]string{
+	"FrooxEngine.UIX.Text": {
+		"Content":            "string",
+		"Color":              "color",
+		"Size":               "float",
+		"HorizontalAutoSize": "bool",
+		"VerticalAutoSize":   "bool",
+		"Enabled":            "bool",
+	},
+	"FrooxEngine.Slot": {
+		"Name":       "string",
+		"Tag":        "string",
+		"ActiveSelf": "bool",
+		"Persistent": "bool",
+		"Position":   "float3",
+		"Rotation":   "quat",
+		"Scale":      "float3",
+	},
 }
 
 func callPath(expr ast.Expr) []string {

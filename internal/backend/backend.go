@@ -238,11 +238,11 @@ func (b *builder) graphNode(node ir.Node) GraphNode {
 		ID:       node.ID,
 		Op:       node.Op,
 		Kind:     classify(node.Op),
-		Path:     protoFluxPath(node.Op),
+		Path:     protoFluxPathForNode(node.Op, inputs),
 		Inputs:   inputs,
 		Body:     b.graphNodes(node.Body),
 		Else:     b.graphNodes(node.Else),
-		Metadata: metadata(node.Op),
+		Metadata: metadataForNode(node.Op, inputs),
 	}
 }
 
@@ -323,10 +323,35 @@ func protoFluxPath(op string) string {
 	}
 }
 
+func protoFluxPathForNode(op string, inputs map[string]any) string {
+	if op == "ProtoFluxNode" {
+		if path, ok := stringMapInput(inputs, "resolvedPath"); ok {
+			return path
+		}
+		if path, ok := stringMapInput(inputs, "path"); ok {
+			return path
+		}
+	}
+	return protoFluxPath(op)
+}
+
 func metadata(op string) map[string]any {
 	meta := map[string]any{"sourceOp": op}
 	if strings.HasPrefix(op, "ProtoFlux") {
 		meta["domain"] = "ProtoFlux"
+	}
+	return meta
+}
+
+func metadataForNode(op string, inputs map[string]any) map[string]any {
+	meta := metadata(op)
+	if op != "ProtoFluxNode" {
+		return meta
+	}
+	for _, key := range []string{"canonicalPath", "nodeName", "nodeCategory", "knownNode"} {
+		if value, ok := inputs[key]; ok {
+			meta[key] = value
+		}
 	}
 	return meta
 }
@@ -390,6 +415,22 @@ func stringInput(inputs map[string]any, name string) string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+func stringMapInput(inputs map[string]any, name string) (string, bool) {
+	value, ok := inputs[name]
+	if !ok || value == nil {
+		return "", false
+	}
+	switch v := value.(type) {
+	case string:
+		return v, v != ""
+	case map[string]any:
+		if raw, ok := v["value"].(string); ok && raw != "" {
+			return raw, true
+		}
+	}
+	return "", false
 }
 
 func packageName(path string) string {

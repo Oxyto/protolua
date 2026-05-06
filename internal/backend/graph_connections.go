@@ -200,16 +200,37 @@ func (b *builder) connectNode(node GraphNode, scope *connectionScope) (GraphNode
 		}
 	}
 
+	providedProtoFluxInputs := map[string]bool{}
 	if table, ok := node.Inputs["inputs"].(map[string]any); ok {
 		for _, field := range tableFields(table) {
+			providedProtoFluxInputs[field.Name] = true
+			kind := protoFluxInputKind(field.Name)
 			port := GraphPort{
 				ID:        nodePortID(node.ID, "data", "in_"+field.Name),
 				Name:      field.Name,
 				Direction: "input",
-				Kind:      "data",
+				Kind:      kind,
 			}
 			node.Ports = append(node.Ports, port)
 			wires = append(wires, dataWiresForExpr(node.ID, field.Value, port.ID, scope, port.Kind)...)
+		}
+	}
+	if node.Op == "ProtoFluxNode" {
+		for _, name := range nodeStringSlice(node.Inputs, "nodeInputs") {
+			name = protoFluxPortName(name)
+			if name == "" || providedProtoFluxInputs[name] {
+				continue
+			}
+			port := GraphPort{
+				ID:        nodePortID(node.ID, "data", "in_"+name),
+				Name:      name,
+				Direction: "input",
+				Kind:      protoFluxInputKind(name),
+			}
+			if hasPort(node.Ports, port.ID) {
+				continue
+			}
+			node.Ports = append(node.Ports, port)
 		}
 	}
 
@@ -298,8 +319,12 @@ func isDataInput(node GraphNode, key string) bool {
 	if node.Op == "Return" && (key == "value" || key == "values") {
 		return false
 	}
-	if node.Op == "ProtoFluxNode" && key == "inputs" {
-		return false
+	if node.Op == "ProtoFluxNode" {
+		switch key {
+		case "inputs", "path", "globals", "options", "resolvedPath", "canonicalPath",
+			"nodeName", "nodeCategory", "knownNode", "nodeInputs", "nodeOutputs":
+			return false
+		}
 	}
 	return true
 }
@@ -311,6 +336,18 @@ func inputKind(node GraphNode, key string) string {
 	case node.Op == "ProtoFluxDrive" && key == "value":
 		return "drive"
 	default:
+		return "data"
+	}
+}
+
+func protoFluxInputKind(name string) string {
+	switch strings.ToLower(name) {
+	case "variable", "reference", "field":
+		return "reference"
+	default:
+		if strings.Contains(strings.ToLower(name), "ref") {
+			return "reference"
+		}
 		return "data"
 	}
 }
@@ -332,12 +369,7 @@ func outputPortsForNode(node GraphNode) []GraphPort {
 			Symbol:    name,
 		}}
 	case "ProtoFluxNode":
-		return []GraphPort{{
-			ID:        nodePortID(node.ID, "data", "out_value"),
-			Name:      "value",
-			Direction: "output",
-			Kind:      "data",
-		}}
+		return protoFluxNodeOutputPorts(node)
 	default:
 		if node.Kind == "source" {
 			return []GraphPort{{
@@ -349,6 +381,80 @@ func outputPortsForNode(node GraphNode) []GraphPort {
 		}
 	}
 	return nil
+}
+
+func protoFluxNodeOutputPorts(node GraphNode) []GraphPort {
+	outputs := nodeStringSlice(node.Inputs, "nodeOutputs")
+	if len(outputs) == 0 {
+		outputs = []string{"value"}
+	}
+	ports := make([]GraphPort, 0, len(outputs))
+	for _, output := range outputs {
+		name := protoFluxPortName(output)
+		if name == "" {
+			continue
+		}
+		kind := "data"
+		if isImpulsePortName(output) {
+			kind = "impulse"
+		}
+		ports = append(ports, GraphPort{
+			ID:        nodePortID(node.ID, kind, "out_"+name),
+			Name:      name,
+			Direction: "output",
+			Kind:      kind,
+		})
+	}
+	if len(ports) == 0 {
+		return []GraphPort{{
+			ID:        nodePortID(node.ID, "data", "out_value"),
+			Name:      "value",
+			Direction: "output",
+			Kind:      "data",
+		}}
+	}
+	return ports
+}
+
+func nodeStringSlice(inputs map[string]any, key string) []string {
+	value, ok := inputs[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch raw := value.(type) {
+	case []string:
+		return append([]string(nil), raw...)
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func protoFluxPortName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "*" {
+		return ""
+	}
+	return name
+}
+
+func isImpulsePortName(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "next", "true", "false", "ontrue", "onfalse", "whiletrue",
+		"loopstart", "loopend", "iteration", "pressed", "pressing",
+		"released", "grabbed", "touched", "touching", "selected",
+		"connected", "disconnected", "onchanged":
+		return true
+	default:
+		return false
+	}
 }
 
 func internalDataWire(nodeID, from, to string, metadata map[string]any) GraphWire {
@@ -439,11 +545,7 @@ func expressionRefs(expr any) []expressionRef {
 			case "FieldAccess":
 				field, _ := v["field"].(string)
 				nextPath := joinPath(path, field)
-				nextKind := kind
-				if nextKind == "" {
-					nextKind = "reference"
-				}
-				walk(v["object"], nextPath, nextKind)
+				walk(v["object"], nextPath, kind)
 			case "FieldReference", "FieldRef", "ReferenceToOutput":
 				walk(v["target"], path, "reference")
 				walk(v["reference"], path, "reference")

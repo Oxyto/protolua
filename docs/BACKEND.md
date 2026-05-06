@@ -1,12 +1,12 @@
-# Backend ProtoLua
+# ProtoLua Backend
 
-Le backend transforme l'AST ProtoLua en IR, puis en modele de record Resonite/ProtoFlux.
+The backend transforms the ProtoLua AST into IR, then into a Resonite/ProtoFlux record model.
 
 ## Formats
 
 ### `ir`
 
-Sortie JSON de l'IR frontend:
+Frontend IR JSON output:
 
 ```sh
 protolua compile examples/flux_component.plua -format ir
@@ -14,49 +14,51 @@ protolua compile examples/flux_component.plua -format ir
 
 ### `record`
 
-Modele de record lisible et deterministe:
+Readable, deterministic record model:
 
 ```sh
 protolua compile examples/flux_component.plua -format record -o out.record.json
 ```
 
-Le record contient:
+The record contains:
 
-- un slot racine;
-- un composant racine de graph ProtoFlux;
-- les entry points `on`;
-- les fonctions;
-- les nodes ProtoFlux et leurs inputs;
-- les ports data/reference/impulse normalises;
-- les wires entre inputs, locals, `output`, `return`, references de fields et enchainements d'impulses;
-- les sorties nommees;
-- les diagnostics/warnings backend.
+- a root slot;
+- a root ProtoFlux graph component;
+- the `on` entry points;
+- functions;
+- ProtoFlux nodes and their inputs;
+- normalized data/reference/impulse ports;
+- wires between inputs, locals, `output`, `return`, field references and impulse chains;
+- named outputs;
+- backend diagnostics/warnings.
 
 ### `brson`
 
-Conteneur binaire experimental:
+Experimental binary container:
 
 ```sh
 protolua compile examples/flux_component.plua -format brson -o out.brson
 ```
 
-Etat actuel:
+Current state:
 
-- header public `FrDT`;
-- 4 octets reserves;
-- type d'archive en varbyte;
-- `archiveType = 1`, correspondant au mode LZ4 frame documente;
-- frame LZ4 valide avec blocs non compresses, pour garder un binaire Go sans dependance externe;
-- `inspect-brson` sait aussi lire les blocs LZ4 compresses, pour comparer de futures fixtures exportees par Resonite;
-- document BSON racine avec `VersionNumber`, `FeatureFlags`, `Types`, `TypeVersions`, `Object`, `Asset`;
-- `Types` contient les noms canoniques CLI-style, et `IComponent.Type` est encode comme index dans cette table;
-- `Slot.Components` est encode comme `UniquePtr(Array(IComponent))`;
-- les enfants de slots portent un `ParentReference` vers l'ID de leur parent;
-- le graph ProtoFlux est materialise en slots debug avec composants `ProtoLua.Runtime.*`, ports et wires normalises;
-- les entrees de table d'un `pf.node("...", { ... })` deviennent des ports de node (`Variable`, `Value`, etc.);
-- sous-document `ProtoLua` pour garder le record debug complet.
+- public `FrDT` header;
+- 4 reserved bytes;
+- archive type as a varbyte;
+- `archiveType = 1`, corresponding to the documented LZ4 frame mode;
+- valid LZ4 frame with uncompressed blocks, to keep the Go binary dependency-free;
+- `inspect-brson` can also read compressed LZ4 blocks, to compare future fixtures exported by Resonite;
+- root BSON document with `VersionNumber`, `FeatureFlags`, `Types`, `TypeVersions`, `Object`, `Asset`;
+- `Types` contains canonical CLI-style names, and `IComponent.Type` is encoded as an index into this table;
+- `Slot.Components` is encoded as `UniquePtr(Array(IComponent))`;
+- slot children carry a `ParentReference` to the parent's ID;
+- the ProtoFlux graph is materialized as debug slots with `ProtoLua.Runtime.*` components, normalized ports and wires;
+- table entries in `pf.node("...", { ... })` become node ports (`Variable`, `Value`, etc.);
+- known generic nodes from the bundled catalog carry their resolved path, canonical path and catalogued ports;
+- unknown generic nodes remain materialized with their raw path, which keeps the backend open to uncatalogued Resonite nodes and community nodes;
+- `ProtoLua` subdocument to keep the full debug record.
 
-Important: le conteneur utilise maintenant le mode LZ4 frame documente et porte un graphe connecte normalise, mais le fichier n'est pas encore garanti importable par Resonite tant que le layout exact des composants persistants et des references ProtoFlux n'est pas valide.
+Important: the container now uses the documented LZ4 frame mode and carries a normalized connected graph, but the file is still not guaranteed to import into Resonite until the exact layout of persistent components and ProtoFlux references is validated.
 
 Inspection:
 
@@ -64,25 +66,25 @@ Inspection:
 protolua inspect-brson out.brson
 ```
 
-## Resolution automatique
+## Automatic Resolution
 
-`-format auto` choisit d'apres l'extension:
+`-format auto` chooses based on the extension:
 
 - `.brson` -> `brson`
 - `.record.json` -> `record`
-- autre ou stdout -> `ir`
+- other or stdout -> `ir`
 
-## Backend sans dependances
+## Dependency-Free Backend
 
-Le backend utilise uniquement la bibliotheque standard Go. Il garde donc l'objectif de livraison en un seul binaire par plateforme.
+The backend uses only the Go standard library. It keeps the goal of shipping a single binary per platform.
 
-## Prochaine etape pour l'import Resonite
+## Next Step for Resonite Import
 
-Pour obtenir un `.brson` importable par Resonite, il faut remplacer le writer experimental par un serializer Resonite Record officiel:
+To get a `.brson` importable by Resonite, the experimental writer has to be replaced with an official Resonite Record serializer:
 
-1. mapper `backend.Record` vers les types exacts de record Resonite;
-2. ecrire les composants et fields avec leurs IDs/types Resonite exacts;
-3. mapper `UniquePtr`, `WorldElementRef`, `Sync<T>` et les index de types exactement;
-4. encoder le binaire `.brson` selon le layout Resonite exact;
-5. tester l'import dans Resonite;
-6. garder `record` comme format debug stable.
+1. map `backend.Record` to the exact Resonite record types;
+2. write components and fields with their exact Resonite IDs/types;
+3. map `UniquePtr`, `WorldElementRef`, `Sync<T>` and type indices exactly;
+4. encode the `.brson` binary according to the exact Resonite layout;
+5. test the import in Resonite;
+6. keep `record` as the stable debug format.

@@ -1,22 +1,25 @@
-# Support editeurs
+# Editor Support
 
-Le serveur de langage est integre au binaire:
+The language server is built into the binary:
 
 ```sh
 protolua lsp
 ```
 
-Il parle LSP sur stdio et fournit:
+It speaks LSP over stdio and provides:
 
-- diagnostics lexer/parser;
-- diagnostics semantiques de base;
-- completions mots-cles, types, `pf.*` et aliases Lua-compatible;
-- hover pour les primitives principales;
-- semantic tokens pour la coloration VSCode/Zed.
+- lexer/parser diagnostics;
+- basic semantic diagnostics;
+- completions for keywords, types, `pf.*` and Lua-compatible aliases;
+- hover for the main primitives;
+- semantic tokens for VSCode/Zed highlighting;
+- local go-to-definition;
+- local symbol rename;
+- simple document formatting.
 
 ## VSCode
 
-Extension locale:
+Local extension:
 
 ```sh
 cd editors/vscode/protolua
@@ -25,18 +28,18 @@ npm install -g @vscode/vsce
 vsce package
 ```
 
-Ensuite installer le `.vsix`.
+Then install the `.vsix`.
 
-La configuration `protolua.serverPath` permet de choisir le chemin du binaire.
+The `protolua.serverPath` setting lets you choose the binary path.
 
 ## Zed
 
-Extension locale:
+Local extension:
 
 ```sh
 zed: install dev extension
 ```
 
-Choisir `editors/zed/protolua`.
+Choose `editors/zed/protolua`.
 
-Le binaire `protolua` doit etre disponible dans le `PATH`. La coloration utilise Tree-sitter et les semantic tokens du LSP.
+The `protolua` binary must be available on `PATH`. Highlighting uses Tree-sitter and LSP semantic tokens.

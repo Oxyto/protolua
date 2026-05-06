@@ -40,6 +40,7 @@ Supported front-end features:
 - event/function inputs and named outputs with `-> (...)`
 - Lua-compatible event declarations with `events.name = function(...) ... end`
 - Lua-compatible ProtoFlux aliases such as `root()`, `node(...)`, `write(field, value)`, `drive(field, value)` and `slot:component(...)`
+- open ProtoFlux node addressing through `node("Category.Node", inputs)` / `pf.node("...")`, with metadata for known catalog nodes
 - component/field interactions through `pf.*`, `write` and `drive`
 - simple Lua table literals for named ProtoFlux inputs/options
 - `repeat ... until`
@@ -64,6 +65,13 @@ Validate the Lua-compatible surface:
 
 ```sh
 go run ./cmd/protolua check --profile lua-compatible examples/lua_compatible.plua
+go run ./cmd/protolua check --profile lua-compatible --strict examples/simple_lua_to_protoflux.plua
+```
+
+Reject unresolved ProtoFlux nodes, ports, fields and unknown `pf.*` helpers:
+
+```sh
+go run ./cmd/protolua check --strict examples/flux_component.plua
 ```
 
 Compile to the current ProtoLua IR:
@@ -90,6 +98,16 @@ Inspect the generated `.brson` bootstrap document:
 go run ./cmd/protolua inspect-brson out.brson
 ```
 
+List or resolve ProtoFlux nodes known by the embedded catalog:
+
+```sh
+go run ./cmd/protolua nodes -search dynamic -limit 10
+go run ./cmd/protolua nodes Write
+go run ./cmd/protolua nodes --wiki --json
+```
+
+Unknown/custom node paths are still accepted by the compiler through `node("Custom.Category.Node", { ... })`; they are emitted as open `ProtoFluxNode` records with `knownNode = false`.
+
 Run the editor language server:
 
 ```sh
@@ -101,6 +119,8 @@ Print the parsed AST:
 ```sh
 go run ./cmd/protolua ast examples/basic.plua
 ```
+
+`require("relative/file")` is resolved by the CLI as a compile-time include, with `.plua` added when omitted. Lua-style type comments (`---@param`, `---@return`, `---@type`) are accepted before functions and local declarations.
 
 ## Single Binary Builds
 

@@ -54,6 +54,49 @@ end
 	}
 }
 
+func TestLowerProtoFluxNodeResolutionMetadata(t *testing.T) {
+	source := `
+on start do
+  node("ProtoFlux:Write", { Value = "Ready" })
+  node("Community.Custom.Node", { Input = 1 })
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowered := Lower(program)
+	event := lowered.Nodes[0]
+	known := event.Body[0]
+	if known.Op != "ProtoFluxNode" {
+		t.Fatalf("expected known generic ProtoFlux node, got %s", known.Op)
+	}
+	if known.Inputs["knownNode"] != true {
+		t.Fatalf("expected ProtoFlux:Write to resolve as known, got %#v", known.Inputs)
+	}
+	if known.Inputs["canonicalPath"] != "ProtoFlux:Write" {
+		t.Fatalf("canonicalPath = %#v, want ProtoFlux:Write", known.Inputs["canonicalPath"])
+	}
+	if outputs, ok := known.Inputs["nodeOutputs"].([]string); !ok || len(outputs) == 0 {
+		t.Fatalf("expected known node outputs metadata, got %#v", known.Inputs["nodeOutputs"])
+	}
+
+	custom := event.Body[1]
+	if custom.Op != "ProtoFluxNode" {
+		t.Fatalf("expected custom generic ProtoFlux node, got %s", custom.Op)
+	}
+	if custom.Inputs["knownNode"] != false {
+		t.Fatalf("expected custom node to remain open/unknown, got %#v", custom.Inputs)
+	}
+	if custom.Inputs["resolvedPath"] != "Community.Custom.Node" {
+		t.Fatalf("resolvedPath = %#v, want Community.Custom.Node", custom.Inputs["resolvedPath"])
+	}
+}
+
 func TestLowerMultipleInputsAndOutputs(t *testing.T) {
 	source := `
 on evaluate(value: float, threshold: float) -> (passed: bool, delta: float) do
@@ -184,5 +227,53 @@ end
 	values := evaluate.Body[0].Inputs["values"].([]any)
 	if len(values) != 2 {
 		t.Fatalf("expected return table to lower to two output values, got %#v", values)
+	}
+}
+
+func TestLowerLuaStdlibCallsToProtoFluxExpressions(t *testing.T) {
+	source := `
+events.start = function()
+  local amount = math.max(1, math.abs(-2))
+  local label = string.format("value", amount)
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowered := Lower(program)
+	start := lowered.Nodes[0]
+	value := start.Body[0].Inputs["value"].(map[string]any)
+	if value["op"] != "ProtoFluxStdlib" || value["path"] != "Operators.ValueMax" {
+		t.Fatalf("expected math.max to lower to ProtoFluxStdlib ValueMax, got %#v", value)
+	}
+	label := start.Body[1].Inputs["value"].(map[string]any)
+	if label["op"] != "ProtoFluxStdlib" || label["path"] != "Strings.FormatString" {
+		t.Fatalf("expected string.format to lower to ProtoFluxStdlib FormatString, got %#v", label)
+	}
+}
+
+func TestLowerFoldsSimpleConstantExpressions(t *testing.T) {
+	source := `
+events.start = function()
+  local amount = 1 + 2 * 3
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lowered := Lower(program)
+	value := lowered.Nodes[0].Body[0].Inputs["value"].(map[string]any)
+	if value["op"] != "Const" || value["value"] != "7" {
+		t.Fatalf("expected folded constant 7, got %#v", value)
 	}
 }

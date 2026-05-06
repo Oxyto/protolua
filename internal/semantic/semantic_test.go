@@ -95,7 +95,85 @@ end
 	}
 }
 
+func TestAnalyzeProtoFluxNodePortsAndStrictMode(t *testing.T) {
+	diagnostics := analyzeSource(t, `
+on start do
+  pf.node("Actions.Write", { Wrong = 1 })
+end
+`)
+	messages := Format(diagnostics)
+	if !strings.Contains(messages, `node ProtoFlux:Write has no input port "Wrong"`) {
+		t.Fatalf("expected unknown port warning, got:\n%s", messages)
+	}
+	if HasErrors(diagnostics) {
+		t.Fatalf("unknown port should be a warning outside strict mode: %#v", diagnostics)
+	}
+
+	strict := analyzeSourceWithOptions(t, `
+on start do
+  pf.node("Community.Custom.Node", { Value = 1 })
+  pf.unlisted_helper(1)
+end
+`, Options{Strict: true})
+	strictMessages := Format(strict)
+	for _, expected := range []string{
+		`unknown ProtoFlux node "Community.Custom.Node" in strict mode`,
+		`unknown ProtoFlux intrinsic "pf.unlisted_helper" in strict mode`,
+	} {
+		if !strings.Contains(strictMessages, expected) {
+			t.Fatalf("expected strict diagnostic %q in:\n%s", expected, strictMessages)
+		}
+	}
+	if !HasErrors(strict) {
+		t.Fatalf("strict diagnostics should include errors")
+	}
+}
+
+func TestAnalyzeKnownComponentFields(t *testing.T) {
+	diagnostics := analyzeSource(t, `
+on start do
+  local root = pf.root()
+  local text = pf.component(root, "FrooxEngine.UIX.Text")
+  pf.debug_log(text.Content)
+  pf.debug_log(text.NotAField)
+end
+`)
+	messages := Format(diagnostics)
+	if !strings.Contains(messages, `component FrooxEngine.UIX.Text has no known field "NotAField"`) {
+		t.Fatalf("expected field diagnostic, got:\n%s", messages)
+	}
+}
+
+func TestAnalyzeLuaStdlibSurface(t *testing.T) {
+	diagnostics := analyzeSource(t, `
+on start do
+  local amount = math.max(1, math.abs(-2))
+  local label = string.format("value: {0}", amount)
+  local len = string.len(label)
+  local items = {}
+  table.insert(items, amount)
+  require("shared")
+end
+`)
+	if len(diagnostics) != 0 {
+		t.Fatalf("expected stdlib calls to pass semantic analysis, got %#v", diagnostics)
+	}
+
+	strict := analyzeSourceWithOptions(t, `
+on start do
+  math.unknown(1)
+end
+`, Options{Strict: true})
+	if !strings.Contains(Format(strict), `unknown Lua stdlib function "math.unknown" in strict mode`) {
+		t.Fatalf("expected strict stdlib diagnostic, got:\n%s", Format(strict))
+	}
+}
+
 func analyzeSource(t *testing.T, source string) []Diagnostic {
+	return analyzeSourceWithOptions(t, source, Options{})
+}
+
+func analyzeSourceWithOptions(t *testing.T, source string, options Options) []Diagnostic {
 	t.Helper()
 	tokens, err := lexer.New(source).Lex()
 	if err != nil {
@@ -105,5 +183,5 @@ func analyzeSource(t *testing.T, source string) []Diagnostic {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Analyze(program)
+	return AnalyzeWithOptions(program, options)
 }

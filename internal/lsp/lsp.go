@@ -15,6 +15,7 @@ import (
 
 	"protolua/internal/lexer"
 	"protolua/internal/parser"
+	"protolua/internal/protoflux"
 	"protolua/internal/semantic"
 )
 
@@ -76,6 +77,16 @@ type semanticTokensParams struct {
 	TextDocument versionedTextDocumentIdentifier `json:"textDocument"`
 }
 
+type renameParams struct {
+	TextDocument versionedTextDocumentIdentifier `json:"textDocument"`
+	Position     position                        `json:"position"`
+	NewName      string                          `json:"newName"`
+}
+
+type documentFormattingParams struct {
+	TextDocument versionedTextDocumentIdentifier `json:"textDocument"`
+}
+
 type signatureHelp struct {
 	Signatures      []signatureInformation `json:"signatures"`
 	ActiveSignature int                    `json:"activeSignature"`
@@ -113,6 +124,11 @@ type completionItem struct {
 	Kind       int    `json:"kind,omitempty"`
 	Detail     string `json:"detail,omitempty"`
 	InsertText string `json:"insertText,omitempty"`
+}
+
+type textEdit struct {
+	Range   rangeValue `json:"range"`
+	NewText string     `json:"newText"`
 }
 
 var tokenTypes = []string{
@@ -250,7 +266,10 @@ func (s *server) handle(msg message) error {
 				"completionProvider": map[string]any{
 					"triggerCharacters": []string{".", ":", "_"},
 				},
-				"hoverProvider": true,
+				"hoverProvider":              true,
+				"definitionProvider":         true,
+				"renameProvider":             true,
+				"documentFormattingProvider": true,
 				"signatureHelpProvider": map[string]any{
 					"triggerCharacters":   []string{"(", ","},
 					"retriggerCharacters": []string{","},
@@ -301,6 +320,24 @@ func (s *server) handle(msg message) error {
 			return err
 		}
 		return s.respond(msg.ID, s.hover(params))
+	case "textDocument/definition":
+		var params textDocumentPositionParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return err
+		}
+		return s.respond(msg.ID, s.definition(params))
+	case "textDocument/rename":
+		var params renameParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return err
+		}
+		return s.respond(msg.ID, s.rename(params))
+	case "textDocument/formatting":
+		var params documentFormattingParams
+		if err := json.Unmarshal(msg.Params, &params); err != nil {
+			return err
+		}
+		return s.respond(msg.ID, s.formatting(params))
 	case "textDocument/signatureHelp":
 		var params textDocumentPositionParams
 		if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -360,7 +397,7 @@ func (s *server) publishDiagnostics(uri string) error {
 		err = parseErr
 		if err == nil {
 			for _, sem := range semantic.Analyze(program) {
-				diagnostics = append(diagnostics, diagnosticFromSemantic(sem))
+				diagnostics = append(diagnostics, diagnosticFromSemantic(source, sem))
 			}
 		}
 	}
@@ -397,16 +434,20 @@ func diagnosticFromError(err error) diagnostic {
 	}
 }
 
-func diagnosticFromSemantic(sem semantic.Diagnostic) diagnostic {
+func diagnosticFromSemantic(source string, sem semantic.Diagnostic) diagnostic {
 	severity := 2
 	if sem.Severity == semantic.Error {
 		severity = 1
 	}
+	rng := rangeValue{
+		Start: position{Line: 0, Character: 0},
+		End:   position{Line: 0, Character: 1},
+	}
+	if found, ok := findSymbolRange(source, sem.Symbol); ok {
+		rng = found
+	}
 	return diagnostic{
-		Range: rangeValue{
-			Start: position{Line: 0, Character: 0},
-			End:   position{Line: 0, Character: 1},
-		},
+		Range:    rng,
 		Severity: severity,
 		Source:   "protolua",
 		Message:  sem.Message,
@@ -414,13 +455,26 @@ func diagnosticFromSemantic(sem semantic.Diagnostic) diagnostic {
 }
 
 func completionItems() []completionItem {
-	items := make([]completionItem, 0, len(lexer.Keywords())+len(pfCompletions)+10)
+	nodeCompletions := protoflux.Search("", 0)
+	items := make([]completionItem, 0, len(lexer.Keywords())+len(pfCompletions)+len(nodeCompletions)+10)
 	keywords := lexer.Keywords()
 	sort.Strings(keywords)
 	for _, keyword := range keywords {
 		items = append(items, completionItem{Label: keyword, Kind: 14, Detail: "ProtoLua keyword"})
 	}
 	items = append(items, pfCompletions...)
+	for _, node := range nodeCompletions {
+		path := node.Canonical
+		if len(node.Aliases) > 0 {
+			path = node.Aliases[0]
+		}
+		items = append(items, completionItem{
+			Label:      path,
+			Kind:       3,
+			Detail:     "ProtoFlux node",
+			InsertText: "node(\"" + path + "\", { })",
+		})
+	}
 	for _, typ := range []string{"Slot", "Component", "User", "bool", "int", "float", "double", "string", "float2", "float3", "float4", "color", "quat"} {
 		items = append(items, completionItem{Label: typ, Kind: 7, Detail: "ProtoLua type"})
 	}
@@ -481,6 +535,47 @@ func (s *server) signatureHelp(params textDocumentPositionParams) any {
 		ActiveSignature: 0,
 		ActiveParameter: active,
 	}
+}
+
+func (s *server) definition(params textDocumentPositionParams) any {
+	source := s.documents[params.TextDocument.URI]
+	symbol := identifierAt(source, params.Position)
+	if symbol == "" || builtInSymbol(symbol) {
+		return nil
+	}
+	if rng, ok := findDefinitionRange(source, symbol); ok {
+		return map[string]any{
+			"uri":   params.TextDocument.URI,
+			"range": rng,
+		}
+	}
+	return nil
+}
+
+func (s *server) rename(params renameParams) any {
+	source := s.documents[params.TextDocument.URI]
+	symbol := identifierAt(source, params.Position)
+	if symbol == "" || builtInSymbol(symbol) || !validIdentifier(params.NewName) {
+		return nil
+	}
+	edits := renameEdits(source, symbol, params.NewName)
+	if len(edits) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"changes": map[string]any{
+			params.TextDocument.URI: edits,
+		},
+	}
+}
+
+func (s *server) formatting(params documentFormattingParams) any {
+	source := s.documents[params.TextDocument.URI]
+	formatted := formatSource(source)
+	return []textEdit{{
+		Range:   fullRange(source),
+		NewText: formatted,
+	}}
 }
 
 func signatureLabel(signature semantic.ProtoFluxSignature) string {
@@ -683,8 +778,234 @@ func wordAt(source string, pos position) string {
 	return string(line[start:end])
 }
 
+func identifierAt(source string, pos position) string {
+	lines := strings.Split(source, "\n")
+	if pos.Line < 0 || pos.Line >= len(lines) {
+		return ""
+	}
+	line := []rune(lines[pos.Line])
+	if pos.Character < 0 || pos.Character > len(line) {
+		return ""
+	}
+	start := pos.Character
+	for start > 0 && isIdentifierRune(line[start-1]) {
+		start--
+	}
+	end := pos.Character
+	for end < len(line) && isIdentifierRune(line[end]) {
+		end++
+	}
+	if start == end {
+		return ""
+	}
+	return string(line[start:end])
+}
+
 func isWordRune(r rune) bool {
 	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '.'
+}
+
+func isIdentifierRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+func findSymbolRange(source, symbol string) (rangeValue, bool) {
+	if symbol == "" {
+		return rangeValue{}, false
+	}
+	lines := strings.Split(source, "\n")
+	for lineNo, line := range lines {
+		if col := strings.Index(line, symbol); col >= 0 {
+			return rangeValue{
+				Start: position{Line: lineNo, Character: col},
+				End:   position{Line: lineNo, Character: col + len([]rune(symbol))},
+			}, true
+		}
+	}
+	return rangeValue{}, false
+}
+
+func findDefinitionRange(source, symbol string) (rangeValue, bool) {
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		return rangeValue{}, false
+	}
+	firstUse := rangeValue{}
+	hasFirstUse := false
+	for i, tok := range tokens {
+		if tok.Type == lexer.EOF || tok.Lexeme != symbol {
+			continue
+		}
+		rng := tokenRange(tok)
+		if !hasFirstUse {
+			firstUse = rng
+			hasFirstUse = true
+		}
+		prev := previousLexeme(tokens, i)
+		prev2 := previousLexemeBefore(tokens, i, 2)
+		if prev == "local" || prev == "function" || prev == "on" || (prev == "function" && prev2 == "local") {
+			return rng, true
+		}
+		if inParameterList(tokens, i) {
+			return rng, true
+		}
+	}
+	return firstUse, hasFirstUse
+}
+
+func renameEdits(source, oldName, newName string) []textEdit {
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		return nil
+	}
+	edits := []textEdit{}
+	for _, tok := range tokens {
+		if tok.Type != lexer.Identifier || tok.Lexeme != oldName {
+			continue
+		}
+		edits = append(edits, textEdit{Range: tokenRange(tok), NewText: newName})
+	}
+	return edits
+}
+
+func tokenRange(tok lexer.Token) rangeValue {
+	line := tok.Line - 1
+	col := tok.Column - 1
+	return rangeValue{
+		Start: position{Line: line, Character: col},
+		End:   position{Line: line, Character: col + len([]rune(tok.Lexeme))},
+	}
+}
+
+func previousLexeme(tokens []lexer.Token, index int) string {
+	return previousLexemeBefore(tokens, index, 1)
+}
+
+func previousLexemeBefore(tokens []lexer.Token, index, count int) string {
+	for i := index - 1; i >= 0; i-- {
+		if tokens[i].Type == lexer.EOF {
+			continue
+		}
+		count--
+		if count == 0 {
+			return tokens[i].Lexeme
+		}
+	}
+	return ""
+}
+
+func inParameterList(tokens []lexer.Token, index int) bool {
+	depth := 0
+	for i := index - 1; i >= 0; i-- {
+		switch tokens[i].Lexeme {
+		case ")":
+			depth++
+		case "(":
+			if depth == 0 {
+				before := previousLexeme(tokens, i)
+				return before != ""
+			}
+			depth--
+		case "do", "then", "end":
+			if depth == 0 {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func builtInSymbol(symbol string) bool {
+	switch symbol {
+	case "pf", "events", "root", "this", "slot", "node", "source", "ref", "dyn",
+		"write", "drive", "color", "float2", "float3", "float4", "quat",
+		"int", "float", "double", "string", "bool":
+		return true
+	default:
+		return false
+	}
+}
+
+func validIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i, r := range value {
+		if i == 0 {
+			if !(unicode.IsLetter(r) || r == '_') {
+				return false
+			}
+			continue
+		}
+		if !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func fullRange(source string) rangeValue {
+	lines := strings.Split(source, "\n")
+	if len(lines) == 0 {
+		return rangeValue{}
+	}
+	last := lines[len(lines)-1]
+	return rangeValue{
+		Start: position{Line: 0, Character: 0},
+		End:   position{Line: len(lines) - 1, Character: len([]rune(last))},
+	}
+}
+
+func formatSource(source string) string {
+	lines := strings.Split(source, "\n")
+	out := make([]string, 0, len(lines))
+	indent := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			out = append(out, "")
+			continue
+		}
+		if startsBlockClose(trimmed) && indent > 0 {
+			indent--
+		}
+		out = append(out, strings.Repeat("  ", indent)+trimmed)
+		if startsMidBlock(trimmed) {
+			indent++
+			continue
+		}
+		if opensBlock(trimmed) {
+			indent++
+		}
+	}
+	formatted := strings.Join(out, "\n")
+	if strings.HasSuffix(source, "\n") && !strings.HasSuffix(formatted, "\n") {
+		formatted += "\n"
+	}
+	return formatted
+}
+
+func startsBlockClose(line string) bool {
+	return line == "end" || strings.HasPrefix(line, "end ") ||
+		line == "else" || strings.HasPrefix(line, "elseif ") ||
+		strings.HasPrefix(line, "until ")
+}
+
+func startsMidBlock(line string) bool {
+	return line == "else" || strings.HasPrefix(line, "elseif ")
+}
+
+func opensBlock(line string) bool {
+	if strings.HasPrefix(line, "repeat") {
+		return true
+	}
+	if strings.HasPrefix(line, "function ") || strings.HasPrefix(line, "local function ") || strings.Contains(line, "= function") {
+		return true
+	}
+	if strings.HasSuffix(line, " do") || strings.HasSuffix(line, " then") {
+		return true
+	}
+	return false
 }
 
 func EncodeRequest(method string, id int, params any) ([]byte, error) {

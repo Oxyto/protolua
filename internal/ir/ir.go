@@ -2,9 +2,11 @@ package ir
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"protolua/internal/ast"
+	"protolua/internal/protoflux"
 )
 
 type Program struct {
@@ -31,11 +33,11 @@ type lowerContext struct {
 
 func Lower(program *ast.Program) Program {
 	b := &Builder{}
-	return Program{
+	return optimizeProgram(Program{
 		Format:  "protolua.protoflux-ir",
 		Version: 1,
 		Nodes:   b.lowerStatements(program.Statements, lowerContext{}),
-	}
+	})
 }
 
 func (b *Builder) lowerStatements(stmts []ast.Stmt, ctx lowerContext) []Node {
@@ -347,6 +349,9 @@ func (b *Builder) lowerCallExpr(call *ast.CallExpr) any {
 	if alias, ok := protoFluxAlias(path); ok {
 		return b.lowerProtoFluxCall(alias, call.Args)
 	}
+	if lowered, ok := b.lowerStdlibCall(path, call.Args); ok {
+		return lowered
+	}
 	if isConstructor(path) {
 		return map[string]any{"op": "Construct", "type": path, "args": args}
 	}
@@ -357,6 +362,60 @@ func (b *Builder) lowerCallExpr(call *ast.CallExpr) any {
 		return map[string]any{"op": "MethodCall", "receiver": b.lowerExpr(member.Object), "method": member.Name, "args": args}
 	}
 	return map[string]any{"op": "Call", "callee": b.lowerExpr(call.Callee), "args": args}
+}
+
+func (b *Builder) lowerStdlibCall(path string, args []ast.Expr) (map[string]any, bool) {
+	nodePath, ok := stdlibProtoFluxPath(path)
+	if !ok {
+		return nil, false
+	}
+	return map[string]any{
+		"op":   "ProtoFluxStdlib",
+		"name": path,
+		"path": nodePath,
+		"args": b.lowerArgs(args),
+	}, true
+}
+
+func stdlibProtoFluxPath(path string) (string, bool) {
+	switch path {
+	case "math.abs":
+		return "Operators.ValueAbs", true
+	case "math.min":
+		return "Operators.ValueMin", true
+	case "math.max":
+		return "Operators.ValueMax", true
+	case "math.floor":
+		return "Math.Floor", true
+	case "math.ceil":
+		return "Math.Ceil", true
+	case "math.sqrt":
+		return "Math.Sqrt", true
+	case "math.sin":
+		return "Math.Trigonometry.Sin", true
+	case "math.cos":
+		return "Math.Trigonometry.Cos", true
+	case "math.tan":
+		return "Math.Trigonometry.Tan", true
+	case "math.rad":
+		return "Math.Trigonometry.Deg2Rad", true
+	case "math.deg":
+		return "Math.Trigonometry.Rad2Deg", true
+	case "string.len":
+		return "Strings.StringLength", true
+	case "string.sub":
+		return "Strings.Substring", true
+	case "string.find":
+		return "Strings.IndexOfString", true
+	case "string.format":
+		return "Strings.FormatString", true
+	case "table.insert":
+		return "Lists.Insert", true
+	case "table.remove":
+		return "Lists.Remove", true
+	default:
+		return "", false
+	}
 }
 
 func protoFluxAlias(path string) (string, bool) {
@@ -549,7 +608,7 @@ func (b *Builder) lowerProtoFluxCall(path string, args []ast.Expr) map[string]an
 	case "pf.list.clear":
 		return pfCall("ListClear", []string{"list"}, args, b)
 	case "pf.node":
-		return pfCall("ProtoFluxNode", []string{"path", "inputs", "globals", "options"}, args, b)
+		return pfNodeCall(args, b)
 	case "pf.impulse":
 		return pfCall("ProtoFluxImpulse", []string{"target", "port"}, args, b)
 	case "pf.pack":
@@ -614,6 +673,34 @@ func pfCall(op string, names []string, args []ast.Expr, b *Builder) map[string]a
 	return inputs
 }
 
+func pfNodeCall(args []ast.Expr, b *Builder) map[string]any {
+	inputs := pfCall("ProtoFluxNode", []string{"path", "inputs", "globals", "options"}, args, b)
+	if len(args) == 0 {
+		return inputs
+	}
+	literal, ok := args[0].(*ast.Literal)
+	if !ok || literal.Kind != "string" {
+		return inputs
+	}
+	resolved := protoflux.Resolve(literal.Value)
+	if resolved.Path == "" {
+		return inputs
+	}
+	inputs["path"] = map[string]any{"op": "Const", "kind": "string", "value": resolved.Path}
+	inputs["resolvedPath"] = resolved.Path
+	inputs["canonicalPath"] = resolved.Canonical
+	inputs["nodeName"] = resolved.Name
+	inputs["nodeCategory"] = resolved.Category
+	inputs["knownNode"] = resolved.Known
+	if resolved.Known {
+		if node, ok := protoflux.Lookup(resolved.Canonical); ok {
+			inputs["nodeInputs"] = append([]string(nil), node.Inputs...)
+			inputs["nodeOutputs"] = append([]string(nil), node.Outputs...)
+		}
+	}
+	return inputs
+}
+
 func callPath(expr ast.Expr) []string {
 	switch e := expr.(type) {
 	case *ast.Identifier:
@@ -639,6 +726,129 @@ func (b *Builder) node(op string, inputs map[string]any, body, elseBody []Node) 
 		node.Else = elseBody
 	}
 	return node
+}
+
+func optimizeProgram(program Program) Program {
+	program.Nodes = optimizeNodes(program.Nodes)
+	return program
+}
+
+func optimizeNodes(nodes []Node) []Node {
+	out := make([]Node, 0, len(nodes))
+	for _, node := range nodes {
+		node.Inputs = optimizeInputs(node.Inputs)
+		node.Body = optimizeNodes(node.Body)
+		node.Else = optimizeNodes(node.Else)
+		out = append(out, node)
+	}
+	return out
+}
+
+func optimizeInputs(inputs map[string]any) map[string]any {
+	if len(inputs) == 0 {
+		return inputs
+	}
+	out := make(map[string]any, len(inputs))
+	for key, value := range inputs {
+		out[key] = optimizeValue(value)
+	}
+	return out
+}
+
+func optimizeValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			v[key] = optimizeValue(child)
+		}
+		if folded, ok := foldExpression(v); ok {
+			return folded
+		}
+		return v
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, optimizeValue(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func foldExpression(expr map[string]any) (map[string]any, bool) {
+	op, _ := expr["op"].(string)
+	left, hasLeft := constNumber(expr["left"])
+	right, hasRight := constNumber(expr["right"])
+	if hasLeft && hasRight {
+		switch op {
+		case "Add":
+			return numberConst(left + right), true
+		case "Subtract":
+			return numberConst(left - right), true
+		case "Multiply":
+			return numberConst(left * right), true
+		case "Divide":
+			if right != 0 {
+				return numberConst(left / right), true
+			}
+		case "Modulo":
+			if right != 0 {
+				return numberConst(float64(int64(left) % int64(right))), true
+			}
+		case "Equal":
+			return boolConst(left == right), true
+		case "NotEqual":
+			return boolConst(left != right), true
+		case "LessThan":
+			return boolConst(left < right), true
+		case "LessThanOrEqual":
+			return boolConst(left <= right), true
+		case "GreaterThan":
+			return boolConst(left > right), true
+		case "GreaterThanOrEqual":
+			return boolConst(left >= right), true
+		}
+	}
+	if op == "Negate" {
+		if value, ok := constNumber(expr["right"]); ok {
+			return numberConst(-value), true
+		}
+	}
+	return nil, false
+}
+
+func constNumber(value any) (float64, bool) {
+	expr, ok := value.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	op, _ := expr["op"].(string)
+	kind, _ := expr["kind"].(string)
+	raw, _ := expr["value"].(string)
+	if op != "Const" || kind != "number" {
+		return 0, false
+	}
+	valueFloat, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, false
+	}
+	return valueFloat, true
+}
+
+func numberConst(value float64) map[string]any {
+	return map[string]any{
+		"op":    "Const",
+		"kind":  "number",
+		"value": strconv.FormatFloat(value, 'f', -1, 64),
+	}
+}
+
+func boolConst(value bool) map[string]any {
+	if value {
+		return map[string]any{"op": "Const", "kind": "boolean", "value": "true"}
+	}
+	return map[string]any{"op": "Const", "kind": "boolean", "value": "false"}
 }
 
 func isActionOp(op string) bool {

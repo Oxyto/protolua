@@ -1,32 +1,32 @@
-# Syntaxe ProtoLua
+# ProtoLua Syntax
 
-ProtoLua est une syntaxe imperative inspiree de Lua 5.4 et Luau, avec un espace de noms `pf` pour exprimer les interactions ProtoFlux, Slots, Components, fields, drivers et dynamic variables.
+ProtoLua is an imperative syntax inspired by Lua 5.4 and Luau, with a `pf` namespace for expressing ProtoFlux, Slots, Components, fields, drivers and dynamic variable interactions.
 
-Le but est de garder le code proche de Lua tout en produisant un IR facile a abaisser en graph ProtoFlux puis en `.brson`.
+The goal is to keep the code close to Lua while producing an IR that is easy to lower into a ProtoFlux graph and then into `.brson`.
 
-## Principes
+## Principles
 
-- Le flux de controle est textuel et imperative: `if`, `while`, `for`, `function`, `return`.
-- Les valeurs suivent les primitives Lua: nombres, strings, booleens et `nil`.
-- Les annotations de type sont optionnelles et servent au backend ProtoFlux: `Slot`, `Component`, `float3`, `color`, `FrooxEngine.UIX.Text`.
-- Les operations ProtoFlux explicites peuvent passer par `pf.*`, mais les aliases Lua-compatible sont preferes pour les cas courants.
-- Les champs de composants peuvent etre lus comme sources, ecrits une fois, drives en continu, ou references.
-- Un appel `pf.*` inconnu reste representable par l'IR generique `ProtoFluxIntrinsic`, ce qui permet d'utiliser un noeud ProtoFlux pas encore specialise dans le compilateur.
+- Control flow is textual and imperative: `if`, `while`, `for`, `function`, `return`.
+- Values follow Lua primitives: numbers, strings, booleans and `nil`.
+- Type annotations are optional and serve the ProtoFlux backend: `Slot`, `Component`, `float3`, `color`, `FrooxEngine.UIX.Text`.
+- Explicit ProtoFlux operations can go through `pf.*`, but Lua-compatible aliases are preferred for common cases.
+- Component fields can be read as sources, written once, driven continuously, or referenced.
+- An unknown `pf.*` call remains representable by the generic `ProtoFluxIntrinsic` IR, which allows using a ProtoFlux node not yet specialized in the compiler.
 
-## Profils de syntaxe
+## Syntax Profiles
 
-ProtoLua accepte deux profils:
+ProtoLua accepts two profiles:
 
-- `protolua-extended`: syntaxe complete avec `on`, `output`, `write field = value`, `drive field = value` et annotations courtes `: Type`.
-- `lua-compatible`: surface qui reste proche de Lua standard. Les events sont declares via `events.name = function(...) ... end`, les writes/drives sont des appels `write(field, value)` et `drive(field, value)`, et les outputs nommes peuvent etre retournes avec une table.
+- `protolua-extended`: full syntax with `on`, `output`, `write field = value`, `drive field = value` and short `: Type` annotations.
+- `lua-compatible`: a surface that stays close to standard Lua. Events are declared via `events.name = function(...) ... end`, writes/drives are `write(field, value)` and `drive(field, value)` calls, and named outputs can be returned with a table.
 
-Verification du profil Lua-compatible:
+Lua-compatible profile check:
 
 ```sh
 protolua check --profile lua-compatible examples/lua_compatible.plua
 ```
 
-Prelude Lua-compatible:
+Lua-compatible prelude:
 
 ```lua
 events.start = function()
@@ -52,11 +52,26 @@ events.evaluate = function(value, threshold)
 end
 ```
 
-`pf.*` reste disponible comme escape hatch bas niveau quand un helper simple n'existe pas encore.
+`pf.*` remains available as a low-level escape hatch when a simple helper does not exist yet.
 
-## Programme
+Strict mode:
 
-Un fichier `.plua` est une suite de statements:
+```sh
+protolua check --strict script.plua
+protolua compile script.plua --strict -format record
+```
+
+In permissive mode, an unknown node or port remains representable in the IR and emits at most a warning. In strict mode, unknown ProtoFlux nodes, unknown `pf.*` intrinsics, unknown `pf.node` ports and unrecognized options become errors.
+
+Target Lua subset:
+
+- Included: local variables, assignments, functions, simple closures, `if`, `while`, `repeat`, numeric `for`, `return`, calls, `:` method calls, simple tables, short/long Lua comments, `require("file")`, and a small `math`/`string`/`table` surface.
+- ProtoLua-specific: `on`, `output`, short `: Type` annotations, `write field = value`, `drive field = value`, `pf` namespace.
+- Not targeted for now: metatables, coroutines, arbitrary Lua IO/filesystem, fully mutable global environment, Lua debug library.
+
+## Program
+
+A `.plua` file is a sequence of statements:
 
 ```lua
 local root: Slot = pf.root()
@@ -71,59 +86,7 @@ function clamp01(value: float): float
 end
 ```
 
-La forme `-> (...)` declare des sorties nommees. Elle est utile pour les events, les helpers ProtoFlux et les groupes qui exposent plusieurs outputs:
-
-```lua
-on compute(a: float, b: float) -> (sum: float, product: float) do
-  output sum = a + b
-  output product = a * b
-end
-```
-
-## Types optionnels
-
-Les annotations sont facultatives:
-
-```lua
-local slot: Slot = pf.root()
-local label: Component = pf.component(slot, "FrooxEngine.UIX.Text")
-
-function move(target: Slot, position: float3)
-  write target.Position = position
-end
-```
-
-Les noms de type acceptent les chemins avec `.`:
-
-```lua
-local text: FrooxEngine.UIX.Text = pf.component(ui, "FrooxEngine.UIX.Text")
-```
-
-## Variables
-
-```lua
-local x = 10
-local y: float = x * 2
-x = x + 1
-```
-
-Une affectation sur un identifiant devient une variable locale ProtoLua. Une affectation sur un membre devient une ecriture ProtoFlux:
-
-```lua
-local text = pf.component(ui, "FrooxEngine.UIX.Text")
-text.Content = "Ready"       -- ecriture ProtoFlux one-shot
-write text.Content = "Ready" -- forme explicite equivalente
-```
-
-## Fonctions
-
-```lua
-function distance(a: float3, b: float3): float
-  return pf.node("Operators.Distance", { A = a, B = b })
-end
-```
-
-Sortie unique avec `->`:
+Single output with `->`:
 
 ```lua
 function is_visible(slot: Slot) -> bool
@@ -131,7 +94,7 @@ function is_visible(slot: Slot) -> bool
 end
 ```
 
-Sorties multiples:
+Multiple outputs:
 
 ```lua
 function divmod(value: int, divisor: int) -> (quotient: int, remainder: int)
@@ -139,7 +102,27 @@ function divmod(value: int, divisor: int) -> (quotient: int, remainder: int)
 end
 ```
 
-Les fonctions sont abaissees en blocs IR `Function`. Le backend pourra les materialiser comme groupes de noeuds, locals et continuations ProtoFlux.
+Functions are lowered into `Function` IR blocks. The backend can materialize them as groups of nodes, locals and ProtoFlux continuations.
+
+## Modules
+
+`require("relative/path")` is recognized as a compile-time import by the CLI. The required file is read once, before the current file, and the `.plua` extension is added if it is missing:
+
+```lua
+-- shared.plua
+function clamp01(value)
+  return math.max(0, math.min(1, value))
+end
+
+-- main.plua
+require("shared")
+
+events.start = function()
+  local amount = clamp01(2)
+end
+```
+
+This form is intended for static ProtoLua helpers. Lua modules with a returned table and a full runtime loader are not part of the current subset.
 
 ## Conditions
 
@@ -153,9 +136,9 @@ else
 end
 ```
 
-## Boucles
+## Loops
 
-Boucle `while`:
+While loop:
 
 ```lua
 while count < 10 do
@@ -163,7 +146,7 @@ while count < 10 do
 end
 ```
 
-Boucle numerique:
+Numeric loop:
 
 ```lua
 for i = 1, 8 do
@@ -175,9 +158,9 @@ for i = 10, 1, -1 do
 end
 ```
 
-## Evenements et impulses
+## Events and Impulses
 
-`on` decrit un point d'entree ProtoFlux:
+`on` describes a ProtoFlux entry point:
 
 ```lua
 on start do
@@ -189,7 +172,7 @@ on update(deltaTime: float, frameIndex: int) do
 end
 ```
 
-Les inputs multiples sont declares comme les parametres d'une fonction. Les outputs multiples utilisent `-> (...)` et sont alimentes par `output`:
+Multiple inputs are declared like function parameters. Multiple outputs use `-> (...)` and are populated with `output`:
 
 ```lua
 on evaluate(value: float, threshold: float) -> (passed: bool, delta: float) do
@@ -198,7 +181,7 @@ on evaluate(value: float, threshold: float) -> (passed: bool, delta: float) do
 end
 ```
 
-Le nom d'evenement peut etre une string si le backend doit garder un nom Resonite exact:
+The event name can be a string if the backend needs to preserve an exact Resonite name:
 
 ```lua
 on "OnUserJoined" do
@@ -219,7 +202,7 @@ false
 "text"
 ```
 
-Operateurs:
+Operators:
 
 ```lua
 a + b
@@ -238,7 +221,7 @@ a >= b
 not enabled
 ```
 
-Constructeurs reconnus par l'IR:
+Recognized constructors in the IR:
 
 ```lua
 float2(1, 2)
@@ -249,12 +232,25 @@ quat(0, 0, 0, 1)
 type("FrooxEngine.Slot")
 ```
 
-Tables Lua simples pour les options et les entrees nommees:
+Simple Lua tables for options and named inputs:
 
 ```lua
 { direct = true, nonPersistent = false }
 { X = 1, Y = 2, Z = 3 }
 ```
+
+Small Lua stdlib lowered to ProtoFlux expressions:
+
+```lua
+local a = math.abs(value)
+local b = math.max(a, 1)
+local c = math.floor(b)
+local label = string.format("value: {0}", c)
+local length = string.len(label)
+table.insert(items, c)
+```
+
+Recognized functions: `math.abs`, `math.min`, `math.max`, `math.floor`, `math.ceil`, `math.sqrt`, `math.sin`, `math.cos`, `math.tan`, `math.rad`, `math.deg`, `string.len`, `string.sub`, `string.find`, `string.format`, `table.insert`, `table.remove`.
 
 ## Slots
 
@@ -267,7 +263,7 @@ local parent = pf.parent(labelSlot)
 local children = pf.children(ui)
 ```
 
-Creation et destruction:
+Creation and destruction:
 
 ```lua
 local created = pf.create_slot(root, "RuntimeLabel", { persistent = false })
@@ -275,7 +271,7 @@ pf.set_active(created, true)
 pf.destroy(created)
 ```
 
-`pf.slot(path)` represente une reference de slot connue par chemin ou identifiant projet:
+`pf.slot(path)` represents a slot reference known by path or project identifier:
 
 ```lua
 local avatarRoot = pf.slot("/User/Avatar")
@@ -283,7 +279,7 @@ local avatarRoot = pf.slot("/User/Avatar")
 
 ## Components
 
-Lecture ou recherche:
+Read or search:
 
 ```lua
 local text = pf.component(labelSlot, "FrooxEngine.UIX.Text")
@@ -291,7 +287,7 @@ local renderers = pf.components(root, "FrooxEngine.UIX.Text")
 local ownerSlot = pf.get_slot(text)
 ```
 
-Ajout et suppression:
+Add and remove:
 
 ```lua
 local text = pf.add_component(labelSlot, "FrooxEngine.UIX.Text", {
@@ -310,16 +306,16 @@ pf.set_enabled(text, true)
 
 ## Fields: source, write, drive, reference
 
-ProtoFlux expose trois manieres classiques d'interagir avec un champ de Slot ou Component:
+ProtoFlux exposes three classic ways to interact with a Slot or Component field:
 
 ```lua
-local content = pf.source(text.Content)     -- source lisible
-local contentRef = pf.ref(text.Content)     -- reference de field
-write text.Content = "Ready"                -- ecriture ponctuelle
-drive text.Color = color(0.1, 0.8, 1, 1)   -- drive continu
+local content = pf.source(text.Content)     -- readable source
+local contentRef = pf.ref(text.Content)     -- field reference
+write text.Content = "Ready"                -- one-shot write
+drive text.Color = color(0.1, 0.8, 1, 1)   -- continuous drive
 ```
 
-Formes fonctionnelles equivalentes:
+Equivalent functional forms:
 
 ```lua
 pf.write(text.Content, "Ready")
@@ -330,15 +326,17 @@ pf.get(text.Content)
 pf.ref_to_output(pf.ref(text.Content))
 ```
 
-Regle pratique:
+Practical rule:
 
-- `write` sert aux modifications one-shot, comme le node ProtoFlux Write.
-- `drive` sert aux valeurs maintenues chaque frame.
-- `pf.source` lit une valeur de field.
-- `pf.ref` donne une reference de field pour les nodes qui attendent une reference.
-- `pf.ref_to_output` convertit une reference ProtoFlux en variable utilisable par les writes indirects.
+- `write` is for one-shot modifications, like the ProtoFlux Write node.
+- `drive` is for values maintained every frame.
+- reading `text.Content` in a data expression is inferred as a source.
+- the same `text.Content` passed to a known reference port, for example `Actions.Write.Variable`, is inferred as a reference.
+- `pf.source` forces a field value read.
+- `pf.ref` forces a field reference for nodes that expect a reference.
+- `pf.ref_to_output` converts a ProtoFlux reference into a variable usable by indirect writes.
 
-Listes de fields:
+Field lists:
 
 ```lua
 local items = pf.field_list(component, "Items")
@@ -352,15 +350,15 @@ pf.list.remove(items, 0)
 pf.list.clear(items)
 ```
 
-## Dynamic variables
+## Dynamic Variables
 
-Espaces:
+Spaces:
 
 ```lua
 pf.dyn.space(root, "ProtoLua")
 ```
 
-Lecture:
+Read:
 
 ```lua
 local title = pf.dyn.read(root, "ProtoLua.Title", "string")
@@ -368,7 +366,7 @@ local sameSpaceTitle = pf.dyn.input("ProtoLua.Title", "string")
 local titleWithEvents = pf.dyn.input_events("ProtoLua.Title", "string")
 ```
 
-Ecriture:
+Write:
 
 ```lua
 pf.dyn.write(root, "ProtoLua.Title", "Ready")
@@ -392,7 +390,7 @@ pf.dyn.write_or_create(root, "ProtoLua.Title", "Ready", {
 })
 ```
 
-Suppression et nettoyage:
+Deletion and cleanup:
 
 ```lua
 pf.dyn.delete(root, "ProtoLua.Title", "string")
@@ -400,15 +398,15 @@ pf.dyn.clear(root)
 pf.dyn.clear_type(root, "string")
 ```
 
-Driver de dynvar vers field:
+Drive a dynvar into a field:
 
 ```lua
 pf.dyn.drive(root, "ProtoLua.Title", text.Content)
 ```
 
-## Noeuds ProtoFlux generiques
+## Generic ProtoFlux Nodes
 
-Pour couvrir un node non encore expose par une fonction dediee:
+To cover a node not yet exposed by a dedicated helper:
 
 ```lua
 local value = pf.node("Operators.ValueAdd<float>", {
@@ -422,7 +420,24 @@ pf.node("Actions.Write", {
 })
 ```
 
-Appels d'impulse:
+The first argument is resolved permissively:
+
+- `Write`, `ProtoFlux:Write` and `Actions.Write` point to the known node `ProtoFlux:Write`.
+- `node("Community.Custom.Node", { ... })` remains valid even if the bundled catalog does not know it yet.
+- Known nodes receive `canonicalPath`, `knownNode = true`, as well as catalogued inputs/outputs in the IR/backend.
+- Unknown nodes keep their raw path with `knownNode = false`, which makes it possible to address community nodes or newer Resonite nodes without waiting for a compiler release.
+
+The CLI exposes the same resolver:
+
+```sh
+protolua nodes Write
+protolua nodes -search websocket -limit 5
+protolua nodes --wiki --json
+```
+
+`--wiki` queries the MediaWiki `Category:ProtoFlux:All` API and produces a list of canonical `ProtoFlux:*` names. That automatic list gives names, but the exact ports/types/generics still have to come from more detailed Resonite sources.
+
+Impulse calls:
 
 ```lua
 pf.impulse(writer, "Write")
@@ -434,78 +449,4 @@ Packing:
 
 ```lua
 pf.pack(root, { name = "ProtoLuaGraph" })
-pf.unpack(root)
 ```
-
-## Inputs et outputs
-
-Les entrees de fonctions et d'events sont des parametres:
-
-```lua
-on update(deltaTime: float, frameIndex: int, user: User) do
-  pf.debug_log(deltaTime)
-end
-```
-
-Les sorties se declarent avec `->`:
-
-```lua
-on raycast(origin: float3, direction: float3) -> (hit: bool, point: float3) do
-  local result = pf.node("Physics.Raycast", {
-    Origin = origin,
-    Direction = direction,
-  })
-
-  output hit = result.Hit
-  output point = result.Point
-end
-```
-
-Dans une fonction, `return` peut renvoyer plusieurs valeurs:
-
-```lua
-function minmax(a: float, b: float) -> (min: float, max: float)
-  if a < b then
-    return a, b
-  end
-  return b, a
-end
-```
-
-## Exemple complet
-
-```lua
-on start do
-  local root: Slot = pf.root()
-  local ui: Slot = pf.find_slot(root, "UI")
-  local text: Component = pf.component(ui, "FrooxEngine.UIX.Text")
-
-  write text.Content = "ProtoLua ready"
-  drive text.Color = color(0.2, 0.8, 1.0, 1.0)
-
-  pf.dyn.space(root, "ProtoLua")
-  pf.dyn.write_or_create(root, "ProtoLua.Status", "Ready", {
-    direct = true,
-    nonPersistent = false,
-  })
-end
-```
-
-## Compatibilite ProtoFlux
-
-La syntaxe suit les concepts publics de ProtoFlux:
-
-- Les champs de Slot/Component peuvent produire des nodes Source, Drive ou Reference.
-- Le node Write modifie une variable/field ponctuellement sans drive continu.
-- Les dynamic variables se manipulent via read, write, create et write-or-create.
-- L'IR garde une operation generique `ProtoFluxIntrinsic` pour les nodes ProtoFlux qui ne sont pas encore specialises.
-
-References utiles:
-
-- https://wiki.resonite.com/ProtoFlux
-- https://wiki.resonite.com/ProtoFlux%3AWrite
-- https://wiki.resonite.com/ProtoFlux%3AReadDynamicVariable
-- https://wiki.resonite.com/ProtoFlux%3AWriteDynamicVariable
-- https://wiki.resonite.com/ProtoFlux%3ACreateDynamicVariable
-- https://wiki.resonite.com/ProtoFlux%3AWriteOrCreateDynamicVariable
-- https://wiki.resonite.com/Dynamic_variables/fr

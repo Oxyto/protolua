@@ -185,9 +185,99 @@ end
 	}
 }
 
+func TestGenericProtoFluxNodeUsesResolvedCatalogPorts(t *testing.T) {
+	source := `
+on start do
+  pf.node("ProtoFlux:Write", {
+    Value = "Ready",
+  })
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := Build(program, Options{SourcePath: "catalog.plua"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	generic := record.Graph.EntryPoints[0].Nodes[0]
+	if generic.Path != "Actions.Write" {
+		t.Fatalf("generic path = %q, want Actions.Write", generic.Path)
+	}
+	if generic.Metadata["knownNode"] != true {
+		t.Fatalf("expected knownNode metadata, got %#v", generic.Metadata)
+	}
+	if !hasGraphPortName(generic.Ports, "Variable", "input") {
+		t.Fatalf("expected catalogued Variable input port, got %#v", generic.Ports)
+	}
+	if !hasGraphPortName(generic.Ports, "Next", "output") {
+		t.Fatalf("expected catalogued Next output port, got %#v", generic.Ports)
+	}
+}
+
+func TestFieldAccessInfersSourceOrReferenceFromPortKind(t *testing.T) {
+	source := `
+on start do
+  local root: Slot = pf.root()
+  local text: Component = pf.component(root, "FrooxEngine.UIX.Text")
+  pf.debug_log(text.Content)
+  pf.node("Actions.Write", {
+    Variable = text.Content,
+    Value = "Ready",
+  })
+end
+`
+	tokens, err := lexer.New(source).Lex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := parser.Parse(tokens)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := Build(program, Options{SourcePath: "fields.plua"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := record.Graph.EntryPoints[0]
+	var debugNode, writeNode *GraphNode
+	for i := range entry.Nodes {
+		switch entry.Nodes[i].Op {
+		case "DebugLog":
+			debugNode = &entry.Nodes[i]
+		case "ProtoFluxNode":
+			writeNode = &entry.Nodes[i]
+		}
+	}
+	if debugNode == nil || writeNode == nil {
+		t.Fatalf("expected debug and generic write nodes, got %#v", entry.Nodes)
+	}
+	if !hasGraphWire(debugNode.Wires, "data") {
+		t.Fatalf("expected field read to become data/source wire, got %#v", debugNode.Wires)
+	}
+	if !hasGraphWire(writeNode.Wires, "reference") {
+		t.Fatalf("expected Write.Variable field to become reference wire, got %#v", writeNode.Wires)
+	}
+}
+
 func hasGraphPort(ports []GraphPort, id string) bool {
 	for _, port := range ports {
 		if port.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGraphPortName(ports []GraphPort, name, direction string) bool {
+	for _, port := range ports {
+		if port.Name == name && port.Direction == direction {
 			return true
 		}
 	}
